@@ -24,24 +24,28 @@ cat("/014") # clear console
 
 
 # ---- Packages ----
-#For data-handling & plotting
-library(tidyverse)
-library(readxl)
-library(lubridate)
-library(zoo)
-# library(ggplot2)
-# library(ggpubr)
-# library(grid)
-# library(egg)
-require(purrr)
-require(data.table)
-require(tools)
-library(hms)
-library(suncalc)
-library(cowplot) #Alligned axis
-library(ggforce) #geom_sina
-library(flextable) #to produce formated tables
-library(officer) #to save tables as word
+#Installs (if needed) and loads required packages:
+required_pkgs <- c("tidyverse",
+                   "readxl",
+                   "lubridate",
+                   "zoo",
+                   "purrr",
+                   "ggpubr",
+                   "data.table",
+                   "tools",
+                   "hms",
+                   "suncalc",
+                   "cowplot",
+                   "ggforce",
+                   "flextable",
+                   "officer")
+
+for (pkg in required_pkgs) {
+  if (!requireNamespace(pkg, quietly = TRUE)) {
+    install.packages(pkg)
+  }
+  library(pkg, character.only = TRUE)
+}
 
 
 # ---- Directories ----
@@ -72,7 +76,7 @@ if (!dir.exists(path_supplementary)) {
 }
 
 
-
+{
 
 #____________________#------
 
@@ -1323,4 +1327,4 @@ print(doc,
 
 
 #____________________--------
-
+}

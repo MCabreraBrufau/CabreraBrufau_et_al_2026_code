@@ -28,20 +28,26 @@
 
 
 rm(list = ls()) # clear workspace
-cat("/014") # clear console
-
 
 # ---- Packages ----
-#For data-handling & plotting
-library(tidyverse)
-library(readxl)
-library(lubridate)
-library(zoo)
-require(purrr)
-require(data.table)
-require(tools)
-library(hms)
-library(suncalc)
+
+#Installs (if needed) and loads required packages:
+required_pkgs <- c("tidyverse",
+                   "readxl",
+                   "lubridate",
+                   "zoo",
+                   "purrr",
+                   "data.table",
+                   "tools",
+                   "hms",
+                   "suncalc")
+
+for (pkg in required_pkgs) {
+  if (!requireNamespace(pkg, quietly = TRUE)) {
+    install.packages(pkg)
+  }
+  library(pkg, character.only = TRUE)
+}
 
 
 # ---- Directories ----
@@ -62,7 +68,7 @@ if (!dir.exists(path_1_paperdata)) {
 
 #__________________------
 #Chamber DATA PREP------
-
+{
 #1. Import inst. fluxes-----
 
 #All datasets must be identified at the UniqueID level
@@ -366,3 +372,4 @@ data4models <- daily_ghg_plotcode %>%
 
 #Save formated and valid in-situ data to be used in paper. 
 write.csv(x = data4models, file = paste0(path_1_paperdata,"ChamberData4paper.csv"),row.names = F)
+}

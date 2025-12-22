@@ -31,36 +31,39 @@
 
 
 rm(list = ls()) # clear workspace
-cat("/014") # clear console
 
 
 # ---- Packages ----
-#For data-handling & plotting
-library(tidyverse)
-library(lubridate)
-library(zoo)
-library(ggpubr)
-library(rlang)
-library(ggtext)#for plot captions
-require(purrr)
-require(data.table)
-require(tools)
-library(hms)
-library(suncalc)
+#Installs (if needed) and loads required packages:
+required_pkgs <- c("tidyverse",
+                   "lubridate",
+                   "zoo",
+                   "ggpubr",
+                   "rlang",
+                   "ggtext",
+                   "purrr",
+                   "data.table",
+                   "tools",
+                   "hms",
+                   "suncalc",
+                   "bestNormalize",
+                   "numDeriv",
+                   "scales",
+                   "glmmTMB",
+                   "DHARMa",
+                   "performance",
+                   "rstatix",
+                   "emmeans",
+                   "multcomp",
+                   "multcompView"
+                   )
 
-
-#For modelling: 
-
-library(bestNormalize) #For data-transformations
-library(numDeriv) #For back-transformation of emmeans and contrasts SEs
-library(scales)#For pseudolog transformation
-library(glmmTMB) #For glmm modelling
-library(DHARMa) #For residual evaluation
-library(performance)#Checking singluar models
-library(rstatix) #Outlier exploration & Anova of models
-library(emmeans) #To estimate EMMs
-library(multcomp)# for emmeans post-hoc comparisons
-library(multcompView) #for clc (letters groups)
+for (pkg in required_pkgs) {
+  if (!requireNamespace(pkg, quietly = TRUE)) {
+    install.packages(pkg)
+  }
+  library(pkg, character.only = TRUE)
+}
 
 
 
@@ -88,7 +91,7 @@ if (!dir.exists(extraplots_path)) {
 }
 
 
-
+{
 #0.Contrast options-----
 #NOTES on contrasts: in R by default, contrast is "contr.treatment" which uses the first level of each factor as the "reference" level and all subsequent as "treatment" levels. This implies that, with default contrast type, when looking at the main effects of my model, what is shown for each main effect is whether there is a significant effect of 1 factor (eg. status) at the reference level of all other factors (i.e. season). What we want is to asses whether there is an overall average effect of status across all levels of season. For this purpose we need to set contrasts to "contr. sum", and always call Anova (model, type="III").
 
@@ -3501,6 +3504,6 @@ complexmodel_customweight_emmeansCLD <- complexmodel_customweight_emmeans %>%
 #Save emmeans and groupletters (back-transformed):  
 write.csv(x = complexmodel_customweight_emmeansCLD, file = paste0(path_2_modeloutputs,"EmmeansCLD_rest_chambermodels.csv"),row.names = F)
 
-
+}
 #_____________----
 
