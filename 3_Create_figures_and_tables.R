@@ -482,7 +482,7 @@ base_gwp_ident<-data4paper %>%
     axis.text.x = element_text(angle = 0, vjust = 0.5, hjust=0.5))+
   guides(color = "none", fill="none")+
   labs(y= expression(Daily~CO[2]*eq~flux~(g~CO[2]*eq~m^-2~d^-1)),
-       x=paste0("Casepilot"),
+       x=paste0("Case pilot"),
        fill=paste0("Status"))
 
 
@@ -584,7 +584,7 @@ plot_ghg_faceted <- function(GHG,
     guides(color = "none", fill = "none") +
     labs(
       y = y_label,
-      x = "Conservation status",
+      x = "Ecological status",
       fill = "Status"
     ) +
     facet_grid(rows = vars(casepilot), scales = "free")
