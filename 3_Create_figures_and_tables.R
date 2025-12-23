@@ -385,7 +385,7 @@ ghgprop %>%
   transmute(casepilot, status, avg_cpstatus_ch4prop, sd_cpstatus_ch4prop, se_cpstatus_ch4prop=sd_cpstatus_ch4prop/sqrt(n_cpstatus_ch4prop))
 
 
-#CH4 proportion across casepilots (including all ecological status)
+#CH4 proportion across casepilots (including all Conservation status)
 ghgprop %>% 
   ungroup() %>% 
  dplyr::select(casepilot, avg_cp_ch4prop, sd_cp_ch4prop, n_cp_ch4prop) %>% 
@@ -601,7 +601,7 @@ plot_ghg_faceted <- function(GHG,
     guides(color = "none", fill = "none") +
     labs(
       y = y_label,
-      x = "Ecological status",
+      x = "Conservation status",
       fill = "Status"
     ) +
     facet_grid(rows = vars(casepilot), scales = "free")
@@ -1237,7 +1237,7 @@ ft_contrasts_gwp<- formatedcontrasts_all %>%
 
 
 doc <- read_docx() %>%
-  body_add_par("Table S3. Post-hoc contrasts between ecological status classes for CO2, CH4 and CO2eq.", style = "heading 1") %>%
+  body_add_par("Table S3. Post-hoc contrasts between Conservation status classes for CO2, CH4 and CO2eq.", style = "heading 1") %>%
   body_add_par("Table S3a. CO2 Post-hoc contrasts.", style = "Normal") %>%
   body_add_flextable(ft_contrasts_co2) %>% 
   body_add_par("Table S3b. CH4 Post-hoc contrasts.", style = "Normal") %>%
