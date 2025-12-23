@@ -122,11 +122,13 @@ simplemodel_significances_alleffects<- simplemodel_summary %>%
 #Import Emmeans +SE + cld groupletters 
 simplemodel_emmeans_all<-read.csv(paste0(path_2_modeloutputs,"EmmeansCLD_RI_chambermodels.csv"))
 
-#Format Emmeans: filter for RI only & remove CLD group-letters from comparisons when all are the same.
+#Format Emmeans: filter for RI only & remove CLD group-letters from comparisons
+#when all are the same.
 RI_simplemodel_emmeans_all<- simplemodel_emmeans_all %>% 
   filter(casepilot=="RI") %>% 
   group_by(ghgspecies, casepilot, comparison) %>% 
-  #If there are no differences (same letter for all levels of a given comparison), remove the cld_group letter 
+  #If there are no differences (same letter for all levels of a given
+  #comparison), remove the cld_group letter
   mutate(cld_group = if (n_distinct(cld_group) == 1) "" else cld_group) %>%
   ungroup() %>% 
   mutate(ghgspecies=factor(ghgspecies, ordered=F),
@@ -145,7 +147,8 @@ RI_simplemodel_emmeans_status<- RI_simplemodel_emmeans_all %>%
 RI_simplemodel_emmeans_season<- RI_simplemodel_emmeans_all %>% 
   filter(comparison=="season")
 
-#status_within_season, re-filter to remove letters when all status are equal under a particular season
+#status_within_season, re-filter to remove letters when all status are equal
+#under a particular season
 RI_simplemodel_emmeans_statuswithinseason<- RI_simplemodel_emmeans_all %>% 
   filter(comparison=="status_within_season") %>% 
   group_by(ghgspecies, casepilot, comparison,season) %>% 
@@ -157,7 +160,8 @@ RI_simplemodel_emmeans_statuswithinseason<- RI_simplemodel_emmeans_all %>%
 
 
 ##Outputs of Complex models------
-#Complex models refer to models that consider status*season*vegpresence as fixed effects (Appropriate for all casepilot except RI).
+#Complex models refer to models that consider status*season*vegpresence as fixed
+#effects (Appropriate for all casepilot except RI).
 
 
 #Import results from models (R2 and significances)
@@ -202,18 +206,22 @@ complexmodel_emmeans_status<- complexmodel_emmeans_all %>%
 complexmodel_emmeans_season<- complexmodel_emmeans_all %>% 
   filter(comparison=="season") 
 
-#status_within_season, need to re-filter to eliminate letters when all are the same at the specific season
+#status_within_season, need to re-filter to eliminate letters when all are the
+#same at the specific season
 complexmodel_emmeans_statuswithinseason<- complexmodel_emmeans_all %>% 
   filter(comparison=="status_within_season") %>% 
   group_by(ghgspecies,casepilot,comparison,season) %>% 
-  #If there are no differences (same letter for all levels within season), remove the cld_group 
+  #If there are no differences (same letter for all levels within season),
+  #remove the cld_group
   mutate(cld_group = if (n_distinct(cld_group) == 1) "" else cld_group)
 
-#status_within_vegpresence, need to re-filter to eliminate letters when all are the same at the specific vegpresence group
+#status_within_vegpresence, need to re-filter to eliminate letters when all are
+#the same at the specific vegpresence group
 complexmodel_emmeans_statuswithinvegpresence<- complexmodel_emmeans_all %>% 
   filter(comparison=="status_within_vegpresence") %>% 
   group_by(ghgspecies,casepilot,comparison,vegpresence) %>% 
-  #If there are no differences (same letter for all levels within season), remove the cld_group 
+  #If there are no differences (same letter for all levels within season),
+  #remove the cld_group
   mutate(cld_group = if (n_distinct(cld_group) == 1) "" else cld_group)
 
 
@@ -254,7 +262,7 @@ str(bestmodel_emmeans_statuswithinvegpresence)
 #TOTAL number of non-na daily fluxes that compose the final dataset presented in the article: 
 #n for CO2, CH4 and GWP
 data4paper %>% 
-  select(plotcode,dailyflux, ghgspecies) %>% 
+ dplyr::select(plotcode,dailyflux, ghgspecies) %>% 
   pivot_wider(names_from = ghgspecies, values_from = dailyflux) %>% 
   summarise(n_co2=sum(!is.na(co2)),
             n_ch4=sum(!is.na(ch4)),
@@ -273,7 +281,8 @@ group_by(sampling) %>%
             median_nchambers=median(n_chambers)) 
 
 ##Zostera coverage in RI------
-#Chamber-derived proportion of vegetated area in RI per status (excluding rising-tide, only considering low-tide chambers in paper)
+#Chamber-derived proportion of vegetated area in RI per status (excluding
+#rising-tide, only considering low-tide chambers in paper)
 plotcodes %>%
   filter(plotcode%in%data4paper$plotcode) %>% 
   filter(casepilot=="RI") %>% 
@@ -344,13 +353,14 @@ plotcodes %>%
 
 ##GHG importance on CO2eq------
 
-#In data4paper, units are: Co2 (molperm2perday), ch4(millimolper m2 per day), GWPco2andch4(gCO2eq per m2 per day)
+#In data4paper, units are: Co2 (molperm2perday), ch4(millimolper m2 per day),
+#GWPco2andch4(gCO2eq per m2 per day)
 
 #Co2 to CO2 eq: mutliply by 44 to get gCO2eq
 #CH4 to CO2eq: divide by 1000 & multiply by 16 to get gCH4, then multiply by 28 to get CO2eq. 
 
 ghgprop<- data4paper %>% 
-  select(season, casepilot, subsite, sampling, status,plotcode, ghgspecies, dailyflux) %>% 
+ dplyr::select(season, casepilot, subsite, sampling, status,plotcode, ghgspecies, dailyflux) %>% 
   pivot_wider(names_from = ghgspecies, values_from = dailyflux) %>% 
   mutate(co2=abs(co2*44),
          ch4=abs((ch4/1000)*16*28),
@@ -368,7 +378,7 @@ ghgprop<- data4paper %>%
 
 #CH4 proportion of CO2eq in Preserved sites
 ghgprop %>% 
-  select(casepilot, status, avg_cpstatus_ch4prop,sd_cpstatus_ch4prop,n_cpstatus_ch4prop,
+ dplyr::select(casepilot, status, avg_cpstatus_ch4prop,sd_cpstatus_ch4prop,n_cpstatus_ch4prop,
          avg_cp_ch4prop, sd_cp_ch4prop, n_cp_ch4prop) %>% 
   distinct() %>% 
   filter(status=="Preserved") %>% 
@@ -378,7 +388,7 @@ ghgprop %>%
 #CH4 proportion across casepilots (including all ecological status)
 ghgprop %>% 
   ungroup() %>% 
-  select(casepilot, avg_cp_ch4prop, sd_cp_ch4prop, n_cp_ch4prop) %>% 
+ dplyr::select(casepilot, avg_cp_ch4prop, sd_cp_ch4prop, n_cp_ch4prop) %>% 
   distinct()
 
 
@@ -453,7 +463,8 @@ xmax<- 4
 ymin<- 5
 ymax<- 20
 
-#Extract and store the y-range (without outliers) of the main plot (they are overriden when using annotation_custom
+#Extract and store the y-range (without outliers) of the main plot (they are
+#overriden when using annotation_custom
 y_range <- range(ggplot_build(base_ch4_ident_main)$layout$panel_params[[1]]$y.range)
 
 
@@ -531,9 +542,15 @@ data4paper %>%
 
 ##Function for Status plots------
 
-#Preserved-Altered-Restored fluxes (boxplots, no without data outside 1.5*IQR "outliers") and with group differences (EMMeans as diamonds, letters from significant post-hoc differences), for each casepilot (vertical pannels). 
+#Preserved-Altered-Restored fluxes (boxplots, no without data outside 1.5*IQR
+#"outliers") and with group differences (EMMeans as diamonds, letters from
+#significant post-hoc differences), for each casepilot (vertical pannels).
 
-#We create a single plot template function (for which we will change the data-origin and yaxis label for each ghgspecies). It takes 4 arguments: GHG ("co2", "ch4","GWPco2andch4"),  y_label (the expression call to use for the y axis), y_multiplier: (multiplier of dailyflux to use, 1000 for CO2 in mmol, 1 for CH4mmol, 1 for GWP in gCO2eq), drawboxplot_outliers (T/F)
+#We create a single plot template function (for which we will change the
+#data-origin and yaxis label for each ghgspecies). It takes 4 arguments: GHG
+#("co2", "ch4","GWPco2andch4"),  y_label (the expression call to use for the y
+#axis), y_multiplier: (multiplier of dailyflux to use, 1000 for CO2 in mmol, 1
+#for CH4mmol, 1 for GWP in gCO2eq), drawboxplot_outliers (T/F)
 
 plot_ghg_faceted <- function(GHG,
                              y_label, 
@@ -973,7 +990,7 @@ rm(formated_summary_complexmodels, formated_summary_simplemodels)
 
 #Format summary table into word-table:
 wordtable_model_summary<- combined_model_summary %>% 
-  select(ghgspecies, casepilot, transformation, formula, family, nobs, R2m, R2c, effect, rounded_p_value) %>% 
+ dplyr::select(ghgspecies, casepilot, transformation, formula, family, nobs, R2m, R2c, effect, rounded_p_value) %>% 
   mutate(effect = factor(gsub("\\."," : ",effect), levels = c("status","season","vegpresence","status : season","status : vegpresence","season : vegpresence","status : season : vegpresence"), ordered = T)) %>% 
   arrange(ghgspecies, casepilot, effect) %>% 
   mutate(transformation=case_when(transformation=="best_pseudo_log"~"pseudo-log",
@@ -1081,7 +1098,9 @@ simplemodel_contrasts<- read.csv(file = paste0(path_2_modeloutputs,"Posthoctests
 formatedcontrasts_RI<- simplemodel_contrasts %>% 
   #Select RI status comparisons: 
   filter(casepilot=="RI", comparison=="status") %>% 
-  #Change the order of contrast to show flux-change after restoration (Restored-Altered), avoided emissions through conservation (Preserved-Altered), and "restoration debt" (Restored-Preserved). 
+  #Change the order of contrast to show flux-change after restoration
+  #(Restored-Altered), avoided emissions through conservation
+  #(Preserved-Altered), and "restoration debt" (Restored-Preserved).
   #Sign-inversion and swap of CL order
   mutate(difference=-estimate_bt, SE=SE_bt, lower.CL=-upper.CL_bt, upper.CL=-lower.CL_bt) %>% 
   mutate(Fghg=case_when(ghgspecies=="co2"~"CO2",
@@ -1099,7 +1118,9 @@ complexmodel_contrasts<- read.csv(file=paste0(path_2_modeloutputs,"Posthoctests_
 formatedcontrasts_rest<- complexmodel_contrasts %>% 
   #Select status comparison for all casepilots (except RI, not in this dataset)
   filter(comparison=="status") %>% 
-  #Change the order of contrast to show flux-change after restoration (Restored-Altered), avoided emissions through conservation (Preserved-Altered), and restoration debt (Restored-Preserved). 
+  #Change the order of contrast to show flux-change after restoration
+  #(Restored-Altered), avoided emissions through conservation
+  #(Preserved-Altered), and restoration debt (Restored-Preserved).
   #Sign-inversion and swap of CL order
   mutate(difference=-estimate_bt, SE=SE_bt, lower.CL=-upper.CL_bt, upper.CL=-lower.CL_bt) %>% 
   mutate(Fghg=case_when(ghgspecies=="co2"~"CO2",
@@ -1116,7 +1137,8 @@ formatedcontrasts_rest<- complexmodel_contrasts %>%
 formatedcontrasts_all<-  rbind(formatedcontrasts_rest,formatedcontrasts_RI) %>% 
   mutate(casepilot=factor(casepilot, levels = c("DU","RI","CA","VA","DA","CU"), ordered = T),
          ghgspecies=factor(ghgspecies, levels=c("co2","ch4","GWPco2andch4"), ordered = T)) %>% 
-  #Change units of CO2 contrast from mol units to mmol m-2 d-1, ch4 is already in mmol m-2d-1, GWP is in gCO2eq m-2d-1
+  #Change units of CO2 contrast from mol units to mmol m-2 d-1, ch4 is already
+  #in mmol m-2d-1, GWP is in gCO2eq m-2d-1
   mutate(difference= if_else(ghgspecies=="co2", difference*1000, difference), 
          SE=if_else(ghgspecies=="co2", SE*1000, SE),
          lower.CL=if_else(ghgspecies=="co2", lower.CL*1000,lower.CL),

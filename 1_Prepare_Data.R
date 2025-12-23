@@ -1,5 +1,4 @@
-#GHGpaper_prepchamberdata.R
-
+#Prepare chamber data for modeling
 
 #Author: Miguel Cabrera-Brufau
 #Date: September 2025
@@ -8,7 +7,10 @@
 
 
 #Description----
-#This scrip is used to prepare the datasets that will be used for statistical analysis and figures of the main GHG paper that will describe the effects of wetland restoration on the fluxes of GHGs using net daily GHG exchange rates of appropriate incubations derived from in-situ measurements.
+#This scrip is used to prepare the datasets that will be used for statistical
+#analysis and figures of the main GHG paper that will describe the effects of
+#wetland restoration on the fluxes of GHGs using daily GHG exchange rates of
+#appropriate incubations derived from in-situ measurements.
 
 #MAIN STEPS of DATA PREPARATION: 
 #1. Import all fluxes and combine in single table (UniqueID, ghg_best, ghg_se, ghg_model) 
@@ -18,8 +20,16 @@
 #6. Final formatting
 #7. Save datasets for further analysis. 
 
+#Naming: 
 
-#Inputs: 
+#UniqueID represents a unique incubation (under transparent or dark conditions)
+#associated with a CO2 and a CH4 concentration timeseries
+
+#plotcode represents a chamber deployment (placement of a static chamber in a
+#specific location to perform incubations). It can be associated with a single
+#UniqueID, or to two UniqueID(s), depending on the strata.
+
+#Inputs to script: 
 #Per-UniqueID: co2 and ch4 best fluxes (and se flux)
 #Per-UniqueID and per-plotcode harmonized field observations. 
 
@@ -154,7 +164,9 @@ fieldobs_plotcode<- read.csv(paste0(path_0_sourcedata,"plotcode_harmonized_field
 
 #3. Filter valid incubations-----
 
-#Remove fieldobs from non-valid/non-appropriate incubations: Incubations that are not representative of subsite definitions, incubations that are not representative of natural conditions
+#Remove fieldobs from non-valid/non-appropriate incubations: Incubations that
+#are not representative of subsite definitions, incubations that are not
+#representative of natural conditions
 
 # 1. Remove rising-tide and receding-tide incubations. (non appropriate fluxes for comparisons)
 tidal_IDs<- fieldobs_uniqueID %>% filter(grepl("rising-tide|receding-tide", field_observations)) %>% pull(UniqueID)
@@ -166,10 +178,15 @@ vegcut_IDs<- fieldobs_uniqueID %>% filter(grepl("after vegetation removal", fiel
 #3.1. Camargue (CA): NOTHING TO REMOVE, all incubations are in appropriate strata
 CA_wrongstrata_IDs<- c()
 
-#3.2. Curonian lagoon (CU): inconsistent bare representation (bare sediments (beach) wrongly considered for restored sites, never for preserved or altered, not appropriate for comparisons). Only vegetated and open water areas are part of the sites sensu-stricto.
+#3.2. Curonian lagoon (CU): inconsistent bare representation (bare sediments
+#(beach) wrongly considered for restored sites, never for preserved or altered,
+#not appropriate for comparisons). Only vegetated and open water areas are part
+#of the sites sensu-stricto.
 CU_wrongstrata_IDs<- fieldobs_uniqueID %>% filter(casepilot=="CU") %>% filter(strata=="bare") %>% pull(UniqueID)
 
-#3.3. Danube delta (DA): inconsistent strata in some samplings: exclude vegetated of S3-DA-A2 (less than 10% of site, not representative), exclude bare of S1-DA-R2 (sampled during first campaign but less than 10% of site)
+#3.3. Danube delta (DA): inconsistent strata in some samplings: exclude
+#vegetated of S3-DA-A2 (less than 10% of site, not representative), exclude bare
+#of S1-DA-R2 (sampled during first campaign but less than 10% of site)
 DA_wrongstrata_IDs<- fieldobs_uniqueID %>% filter(casepilot=="DA") %>% 
   filter((sampling=="S3-DA-A2"&strata=="vegetated")|(sampling=="S1-DA-R2"&strata=="bare")) %>% 
   pull(UniqueID)
@@ -177,7 +194,11 @@ DA_wrongstrata_IDs<- fieldobs_uniqueID %>% filter(casepilot=="DA") %>%
 #3.4. Dutch delta (DU): NOTHING TO REMOVE, all incubations are in appropriate strata
 DU_wrongstrata_IDs<- c()
 
-#3.5. Ria d'Aveiro (RI): rising-tide and "after vegetation removal" already removed. Inconsistent incubations: tidal-pool incubations in S3-RI-A1 (only considered in S3, less than 10% of site), bare incubations in RI-R1 and in RI-R2 (wrong extra-incubations, restored sites are 100% vegetated by definition)
+#3.5. Ria d'Aveiro (RI): rising-tide and "after vegetation removal" already
+#removed. Inconsistent incubations: tidal-pool incubations in S3-RI-A1 (only
+#considered in S3, less than 10% of site), bare incubations in RI-R1 and in
+#RI-R2 (wrong extra-incubations, restored sites are 100% vegetated by
+#definition)
 RI_wrongstrata_IDs<- fieldobs_uniqueID %>% filter(casepilot=="RI") %>% 
   filter((sampling=="S3-RI-A1"&grepl("tidal-pool", field_observations))|(subsite=="RI-R1"&strata=="bare")|(subsite=="RI-R2"&strata=="bare")) %>% pull(UniqueID)
 
@@ -206,7 +227,9 @@ length(plotcodes_with_bestflux)
 n_all_plotcodes_with_bestflux<- length(plotcodes_with_bestflux)
 n_valid_plotcodes_with_bestflux<- sum(valid_plotcodes%in%plotcodes_with_bestflux)
 
-#Number of plotcodes with valid fluxes (with at least 1 best-flux estimate) that were discarded due to being performed in non-comparable conditions (out of site, during high tide, after veg cut only,...)
+#Number of plotcodes with valid fluxes (with at least 1 best-flux estimate) that
+#were discarded due to being performed in non-comparable conditions (out of
+#site, during high tide, after veg cut only,...)
 n_all_plotcodes_with_bestflux-n_valid_plotcodes_with_bestflux
 
 #Percentage
@@ -233,7 +256,8 @@ valid_plotcodes<- valid_fieldobs_uniqueID %>%
 
 ##4.1. Get daylight hours----
 
-#daylight hours are defined as time from sunrise to sunset (using package suncalc, median lat/long of each subsite and date of sampling)
+#daylight hours are defined as time from sunrise to sunset (using package
+#suncalc, median lat/long of each subsite and date of sampling)
 
 # get median coordinates per subsite (including all seasons)
 samplings <- valid_fieldobs_uniqueID %>% 
@@ -343,7 +367,9 @@ rm(samplings, sampling_daylight, fieldobs_plotcode, fieldobs_uniqueID, valid_plo
 
 #Produce final dataset to be used in models. Formatting to simplify filtering for modeling. 
 
-#We will use molar fluxes for individual ghgspecies and CO2eq (gCo2eq /m2/d) for GWP of combined ghgspecies. Add column with "units" to be able to differentiate. 
+#We will use molar fluxes for individual ghgspecies and CO2eq (gCo2eq /m2/d) for
+#GWP of combined ghgspecies. Add column with "units" to be able to
+#differentiate.
 
 #We format the dataset to be easily used across our modeling approaches: 
 #categories are taken as factors, we pivot longer the daily fluxes (response variable)

@@ -6,16 +6,25 @@
 
 
 #Description----
-#This scrip is used to model the effect of restoration in each casepilot. Using net daily GHG exchange rates of appropriate incubations, data preparation is in GHGpaper_prepChamberData.R script. 
+#This scrip is used to model the effect of restoration in each casepilot. Using
+#net daily GHG exchange rates of appropriate incubations, data preparation is in
+#GHGpaper_prepChamberData.R script.
 
 
-#DECISSIONS: 
-  #Pooling of non-vegetated strata: due to seasonal variability and site-specific differences, using the 3 original strata classes is impossible (would lead to to rank-deficient models for some combinations). Instead we group them into vegpresence: vegetated or not-vegetated
+#DECISIONS: 
+  #Pooling of non-vegetated strata: due to seasonal variability and
+  #site-specific differences, using the 3 original strata classes is impossible
+  #(would lead to to rank-deficient models for some combinations). Instead we
+  #group them into vegpresence: vegetated or not-vegetated
   
 #Modelling approach for DU,CA,VA,DA,CU: GLMMtmb with general formula dailyflux~status*season*vegpresence + (1|subsite)
   #Modelling approach for RI: reduced model without vegpresence (to avoid rank-deficient due to restored sites being 100% vegetated)
 
-  #Contrast: Set contrast options to "contr. sum", so that we are not using any one level of a factor as the reference level, but rather the tests will asses whether there is an overall average effect of one factor across all levels of the other factors. For example, is there an effect of status across all levels of season?
+  #Contrast: Set contrast options to "contr. sum", so that we are not using any
+  #one level of a factor as the reference level, but rather the tests will asses
+  #whether there is an overall average effect of one factor across all levels of
+  #the other factors. For example, is there an effect of status across all
+  #levels of season?
 
 
 #STEPS: 
@@ -93,7 +102,15 @@ if (!dir.exists(extraplots_path)) {
 
 {
 #0.Contrast options-----
-#NOTES on contrasts: in R by default, contrast is "contr.treatment" which uses the first level of each factor as the "reference" level and all subsequent as "treatment" levels. This implies that, with default contrast type, when looking at the main effects of my model, what is shown for each main effect is whether there is a significant effect of 1 factor (eg. status) at the reference level of all other factors (i.e. season). What we want is to asses whether there is an overall average effect of status across all levels of season. For this purpose we need to set contrasts to "contr. sum", and always call Anova (model, type="III").
+#NOTES on contrasts: in R by default, contrast is "contr.treatment" which uses
+#the first level of each factor as the "reference" level and all subsequent as
+#"treatment" levels. This implies that, with default contrast type, when looking
+#at the main effects of my model, what is shown for each main effect is whether
+#there is a significant effect of 1 factor (eg. status) at the reference level
+#of all other factors (i.e. season). What we want is to asses whether there is
+#an overall average effect of status across all levels of season. For this
+#purpose we need to set contrasts to "contr. sum", and always call Anova (model,
+#type="III").
 
 #Set contrasts to contr.sum (for the whole R session)
 options(contrasts = c("contr.sum", "contr.poly"))
@@ -120,12 +137,14 @@ data4models<- data4models %>%
   
 
 #Notes -----
-#Evaluate model structure and assumptions (residuals), not significance of effects nor even explained variability (we expect very little variance explained by status in many cases). 
+#Evaluate model structure and assumptions (residuals), not significance of
+#effects nor even explained variability (we expect very little variance
+#explained by status in many cases).
 
 #1st step is to decide the approach based on our data structure and distribution. 
 
-#Fixed decissions: 
-#Each case-pilot is modelled independently (different data-distributions and transformation needs)
+#Fixed decisions: 
+#Each case-pilot is modeled independently (different data-distributions and transformation needs)
 #Need to include subsite as random effect (accounts for repeated samplings and site-specific intercepts)
 
 #Approach: use Generalized Linear Mixed Models (glmmTMB)
@@ -138,7 +157,9 @@ data4models<- data4models %>%
 
 
 #0. Custom Functions -------
-#Here functions to access relevant results from models contained inside a named list. Used for ease of formatting and to avoid repetition. Will be used to summarise information.  
+#Here functions to access relevant results from models contained inside a named
+#list. Used for ease of formatting and to avoid repetition. Will be used to
+#summarise information.
 
 #Formula to get marginal and conditional R2s from model list:
 get_R2s <- function(model_list) {
@@ -176,7 +197,9 @@ get_R2s <- function(model_list) {
 
 
 #Function to get various pseudoR2 estimates and extract structure of each model
-#calculate various pseudo-R2 metrics (log-Likelyhood based) to get the "improvement in model fit relative to a null model (intercept + random effects), capturing the combined explanatory contribution of fixed effects".
+#calculate various pseudo-R2 metrics (log-Likelyhood based) to get the
+#"improvement in model fit relative to a null model (intercept + random
+#effects), capturing the combined explanatory contribution of fixed effects".
 #We have 4 estimates: 
 #Efron pseudoR2: squared correlation between observed and predicted values. 
 #The other 3 pseudoR2 come from Log-likelihood comparisons between actual and null model.
@@ -211,7 +234,9 @@ get_pseudoR2s<- function(model_list){
 }
 
 
-#Function to extract model structure and all fixed effects significance (regardless of their naming, can differ in order or presence across the models in model_list)
+#Function to extract model structure and all fixed effects significance
+#(regardless of their naming, can differ in order or presence across the models
+#in model_list)
 get_all_anova_results <- function(model_list) {
   library(car)
   library(glmmTMB)
@@ -453,8 +478,11 @@ plot_obs_vs_pred_models <- function(model1, data, model2 = NULL, color_var = "ve
 ##Pseudolog-------
 #Adapted from scales package
 
-#Notes on pseudolog (~signed log) transformation: https://stratosida.github.io/regression-regrets/Pseudo_log_explainer.html#finding-a-parameter-that-best-achieves-normality
-#Pseudolog tranformation needs tunning of its parameter to each data-set (similar to yeo-johnson). To incorporate this transformation into the BestNormalize, we need to create several functions. 
+#Notes on pseudolog (~signed log) transformation:
+#https://stratosida.github.io/regression-regrets/Pseudo_log_explainer.html#finding-a-parameter-that-best-achieves-normality
+#Pseudolog tranformation needs tunning of its parameter to each data-set
+#(similar to yeo-johnson). To incorporate this transformation into the
+#BestNormalize, we need to create several functions.
 
 #Pseudolog transformation allows and maintains NAs, allows and mantains negative and positive values 
 #Range of potential sigmas are data-driven: based on 10th-90th percentile ranges. 
@@ -570,7 +598,10 @@ pseudolog_transform <- list(
 #1.Transformations------
 
 #Data needs transformation for compliance with model assumptions. 
-#We will use a completely objective decision for transformation: using BestNormalize function (with pseudolog tranformation as a potential option), we will chose the transformation that results in the most-normal data distribution. 
+#We will use a completely objective decision for transformation: using
+#BestNormalize function (with pseudolog transformation as a potential option),
+#we will chose the transformation that results in the most-normal data
+#distribution.
 
 #USE bestNormalize (allowing for pseudo-log trans) to obtain for each dataset (ghg*casepilot combo) the most-Normal transformation: 
 rm(table_trans, table_trans_i)
@@ -610,7 +641,8 @@ table_trans
 rm(cp, bn_result, table_trans_i, ghg, x, x_trans, pval)
 
 
-#Automatically apply the best transformation to each dataset within data4models using the bestNormalize objects stored in table_trans 
+#Automatically apply the best transformation to each dataset within data4models
+#using the bestNormalize objects stored in table_trans
 
 # Create a named list of BestNormalize objects for easy lookup
 bn_list <- table_trans %>%
@@ -635,7 +667,9 @@ data4models <- data4models %>%
 
 #GENERAL MODEL potential OPTIONS: 
 
-#For RI, we cannot include vegpresence in model (would lead to deficient models, restored is 100%vegetated)USE ONLY BASIC FORMULA: dailyflux_trans~season*status + (1|subsite)
+#For RI, we cannot include vegpresence in model (would lead to deficient models,
+#restored is 100%vegetated)USE ONLY BASIC FORMULA: dailyflux_trans~season*status
+#+ (1|subsite)
 
 #For REST, allow vegpresence as fixed effect, decide best model based on residuals and fit. 
 
@@ -673,7 +707,7 @@ res<- simulateResiduals(m1_gaus_nostrata)
 plotQQunif(res)
 plotResiduals(res)
 check_residuals(m1_gaus_nostrata)
-#DECISSION: Good residuals, keep
+#DECISION: Good residuals, keep
 
 
 #Vegetation presence: gaussian, status, season and veg presence as fixed, subsite as random
@@ -691,7 +725,7 @@ res<- simulateResiduals(m2_gaus_vegpresence)
 plotQQunif(res)
 plotResiduals(res)
 check_residuals(m2_gaus_vegpresence)
-#DECISSION: BAD residuals
+#DECISION: BAD residuals
 
 
 #T_family:
@@ -710,7 +744,7 @@ res<- simulateResiduals(m3_t_nostrata)
 plotQQunif(res)
 plotResiduals(res)
 check_residuals(m3_t_nostrata)
-#DECISSION: does not converge. 
+#DECISION: does not converge. 
 
 
 #Vegetation presence: t_family, status, season and veg presence as fixed, subsite as random
@@ -783,7 +817,7 @@ res<- simulateResiduals(m1_gaus_nostrata)
 plotQQunif(res)
 plotResiduals(res)
 check_residuals(m1_gaus_nostrata)
-#DECISSION: Bad residuals
+#DECISION: Bad residuals
 
 
 #Vegetation presence: gaussian, status, season and veg presence as fixed, subsite as random
@@ -801,7 +835,7 @@ res<- simulateResiduals(m2_gaus_vegpresence)
 plotQQunif(res)
 plotResiduals(res)
 check_residuals(m2_gaus_vegpresence)
-#DECISSION: BAD residuals
+#DECISION: BAD residuals
 
 
 #T_family:
@@ -820,7 +854,7 @@ res<- simulateResiduals(m3_t_nostrata)
 plotQQunif(res)
 plotResiduals(res)
 check_residuals(m3_t_nostrata)
-#DECISSION: Better residuals, although they still fail
+#DECISION: Better residuals, although they still fail
 
 
 #Vegetation presence: t_family, status, season and veg presence as fixed, subsite as random
@@ -891,7 +925,7 @@ res<- simulateResiduals(m1_gaus_nostrata)
 plotQQunif(res)
 plotResiduals(res)
 check_residuals(m1_gaus_nostrata)
-#DECISSION: Bad residuals
+#DECISION: Bad residuals
 
 
 #Vegetation presence: gaussian, status, season and veg presence as fixed, subsite as random
@@ -909,7 +943,7 @@ res<- simulateResiduals(m2_gaus_vegpresence)
 plotQQunif(res)
 plotResiduals(res)
 check_residuals(m2_gaus_vegpresence)
-#DECISSION: BAD residuals
+#DECISION: BAD residuals
 
 
 
@@ -929,7 +963,7 @@ res<- simulateResiduals(m3_t_nostrata)
 plotQQunif(res)
 plotResiduals(res)
 check_residuals(m3_t_nostrata)
-#DECISSION: Better residuals, although they still fail
+#DECISION: Better residuals, although they still fail
 
 
 #Vegetation presence: t_family, status, season and veg presence as fixed, subsite as random
@@ -999,7 +1033,7 @@ res<- simulateResiduals(m1_gaus_nostrata)
 plotQQunif(res)
 plotResiduals(res)
 check_residuals(m1_gaus_nostrata)
-#DECISSION: GOOD residuals
+#DECISION: GOOD residuals
 
 
 #Vegetation presence: gaussian, status, season and veg presence as fixed, subsite as random
@@ -1017,7 +1051,7 @@ res<- simulateResiduals(m2_gaus_vegpresence)
 plotQQunif(res)
 plotResiduals(res)
 check_residuals(m2_gaus_vegpresence)
-#DECISSION: BAD residuals
+#DECISION: BAD residuals
 
 
 #T_family:
@@ -1036,7 +1070,7 @@ res<- simulateResiduals(m3_t_nostrata)
 plotQQunif(res)
 plotResiduals(res)
 check_residuals(m3_t_nostrata)
-#DECISSION: Model does not converge
+#DECISION: Model does not converge
 
 
 #Vegetation presence: t_family, status, season and veg presence as fixed, subsite as random
@@ -1054,7 +1088,7 @@ res<- simulateResiduals(m4_t_vegpresence)
 plotQQunif(res)
 plotResiduals(res)
 check_residuals(m4_t_vegpresence)
-#DECISSION: good residuals
+#DECISION: good residuals
 
 #Compare models 
 anova(m1_gaus_nostrata,m4_t_vegpresence)
@@ -1107,7 +1141,7 @@ res<- simulateResiduals(m1_gaus_nostrata)
 plotQQunif(res)
 plotResiduals(res)
 check_residuals(m1_gaus_nostrata)
-#DECISSION: GOOD residuals
+#DECISION: GOOD residuals
 
 
 #SKIP t-family option: gaussian is already good
@@ -1129,7 +1163,7 @@ plotQQunif(res)
 plotResiduals(res)
 check_residuals(m3_t_nostrata)
 
-#DECISSION: 
+#DECISION: 
 }
 
 
@@ -1183,7 +1217,7 @@ res<- simulateResiduals(m1_gaus_nostrata)
 plotQQunif(res)
 plotResiduals(res)
 check_residuals(m1_gaus_nostrata)
-#DECISSION: BAD residuals (bad model)
+#DECISION: BAD residuals (bad model)
 
 
 #Vegetation presence: gaussian, status, season and veg presence as fixed, subsite as random
@@ -1201,7 +1235,7 @@ res<- simulateResiduals(m2_gaus_vegpresence)
 plotQQunif(res)
 plotResiduals(res)
 check_residuals(m2_gaus_vegpresence)
-#DECISSION: BAD residuals
+#DECISION: BAD residuals
 
 
 #T_family:
@@ -1220,7 +1254,7 @@ res<- simulateResiduals(m3_t_nostrata)
 plotQQunif(res)
 plotResiduals(res)
 check_residuals(m3_t_nostrata)
-#DECISSION: Model does not converge
+#DECISION: Model does not converge
 
 
 #Vegetation presence: t_family, status, season and veg presence as fixed, subsite as random
@@ -1238,7 +1272,7 @@ res<- simulateResiduals(m4_t_vegpresence)
 plotQQunif(res)
 plotResiduals(res)
 check_residuals(m4_t_vegpresence)
-#DECISSION: good residuals
+#DECISION: good residuals
 
 #Compare models 
 
@@ -1292,7 +1326,7 @@ res<- simulateResiduals(m1_gaus_nostrata)
 plotQQunif(res)
 plotResiduals(res)
 check_residuals(m1_gaus_nostrata)
-#DECISSION: Good residuals, keep
+#DECISION: Good residuals, keep
 
 
 
@@ -1310,7 +1344,7 @@ res<- simulateResiduals(m2_gaus_vegpresence)
 plotQQunif(res)
 plotResiduals(res)
 check_residuals(m2_gaus_vegpresence)
-#DECISSION: GOOD residuals, keep
+#DECISION: GOOD residuals, keep
 
 
 #SKIP t-family options, gaussians already good
@@ -1330,7 +1364,7 @@ res<- simulateResiduals(m3_t_nostrata)
 plotQQunif(res)
 plotResiduals(res)
 check_residuals(m3_t_nostrata)
-#DECISSION: 
+#DECISION: 
 
 
 #Vegetation presence: t_family, status, season and veg presence as fixed, subsite as random
@@ -1348,12 +1382,13 @@ plotQQunif(res)
 plotResiduals(res)
 check_residuals(m4_t_vegpresence)
 check_overdispersion(m4_t_vegpresence)
-#DECISSION: 
+#DECISION: 
 }
 
 #Compare models 
 anova(m1_gaus_nostrata,m2_gaus_vegpresence)
-#Adding vegpresence does not significantly improve fit. We will use it regardless for consistency and to check for vegetation-transport effects
+#Adding vegpresence does not significantly improve fit. We will use it
+#regardless for consistency and to check for vegetation-transport effects
 
 #Save best models (simple and complex best)
 ca_simplemodel_ch4<- m1_gaus_nostrata
@@ -1403,7 +1438,7 @@ res<- simulateResiduals(m1_gaus_nostrata)
 plotQQunif(res)
 plotResiduals(res)
 check_residuals(m1_gaus_nostrata)
-#DECISSION: Good-enough residuals
+#DECISION: Good-enough residuals
 
 
 #Vegetation presence: gaussian, status, season and veg presence as fixed, subsite as random
@@ -1421,7 +1456,7 @@ res<- simulateResiduals(m2_gaus_vegpresence)
 plotQQunif(res)
 plotResiduals(res)
 check_residuals(m2_gaus_vegpresence)
-#DECISSION: Good residuals
+#DECISION: Good residuals
 
 
 #SKIP, GAUSSIAN ALREADY GOOD
@@ -1442,7 +1477,7 @@ res<- simulateResiduals(m3_t_nostrata)
 plotQQunif(res)
 plotResiduals(res)
 check_residuals(m3_t_nostrata)
-#DECISSION:
+#DECISION:
 
 
 #Vegetation presence: t_family, status, season and veg presence as fixed, subsite as random
@@ -1460,7 +1495,7 @@ res<- simulateResiduals(m4_t_vegpresence)
 plotQQunif(res)
 plotResiduals(res)
 check_residuals(m4_t_vegpresence)
-#DECISSION: 
+#DECISION: 
 }
 
 #Compare models 
@@ -1512,7 +1547,7 @@ res<- simulateResiduals(m1_gaus_nostrata)
 plotQQunif(res)
 plotResiduals(res)
 check_residuals(m1_gaus_nostrata)
-#DECISSION: Bad residuals
+#DECISION: Bad residuals
 
 
 #Vegetation presence: gaussian, status, season and veg presence as fixed, subsite as random
@@ -1530,7 +1565,7 @@ res<- simulateResiduals(m2_gaus_vegpresence)
 plotQQunif(res)
 plotResiduals(res)
 check_residuals(m2_gaus_vegpresence)
-#DECISSION: BAD residuals
+#DECISION: BAD residuals
 
 
 #T_family:
@@ -1549,7 +1584,7 @@ res<- simulateResiduals(m3_t_nostrata)
 plotQQunif(res)
 plotResiduals(res)
 check_residuals(m3_t_nostrata)
-#DECISSION: Better residuals, although they still fail
+#DECISION: Better residuals, although they still fail
 
 
 #Vegetation presence: t_family, status, season and veg presence as fixed, subsite as random
@@ -1618,7 +1653,7 @@ res<- simulateResiduals(m1_gaus_nostrata)
 plotQQunif(res)
 plotResiduals(res)
 check_residuals(m1_gaus_nostrata)
-#DECISSION: GOOD residuals
+#DECISION: GOOD residuals
 
 
 #Vegetation presence: gaussian, status, season and veg presence as fixed, subsite as random
@@ -1636,7 +1671,7 @@ res<- simulateResiduals(m2_gaus_vegpresence)
 plotQQunif(res)
 plotResiduals(res)
 check_residuals(m2_gaus_vegpresence)
-#DECISSION: GOOD residuals
+#DECISION: GOOD residuals
 
 
 #SKIP, gaussian already good: 
@@ -1656,7 +1691,7 @@ res<- simulateResiduals(m3_t_nostrata)
 plotQQunif(res)
 plotResiduals(res)
 check_residuals(m3_t_nostrata)
-#DECISSION:
+#DECISION:
 
 
 #Vegetation presence: t_family, status, season and veg presence as fixed, subsite as random
@@ -1673,13 +1708,15 @@ res<- simulateResiduals(m4_t_vegpresence)
 plotQQunif(res)
 plotResiduals(res)
 check_residuals(m4_t_vegpresence)
-#DECISSION:
+#DECISION:
 
 }
 
 #Compare models 
 anova(m1_gaus_nostrata,m2_gaus_vegpresence)
-#Adding vegpresence does not significantly improve fit (not worth the extra complexity), we will still use it for consistency and to evaluate vegetation effects.
+#Adding vegpresence does not significantly improve fit (not worth the extra
+#complexity), we will still use it for consistency and to evaluate vegetation
+#effects.
 
 #Save best models (simple and complex best)
 du_simplemodel_ch4<- m1_gaus_nostrata
@@ -1726,7 +1763,7 @@ res<- simulateResiduals(m1_gaus_nostrata)
 plotQQunif(res)
 plotResiduals(res)
 check_residuals(m1_gaus_nostrata)
-#DECISSION: BAD residuals
+#DECISION: BAD residuals
 
 
 #SKIP! cannot include vegpresence as fixed with status
@@ -1746,7 +1783,7 @@ if(F){
   plotQQunif(res)
   plotResiduals(res)
   check_residuals(m2_gaus_vegpresence)
-  #DECISSION: 
+  #DECISION: 
 }
 
 
@@ -1766,7 +1803,7 @@ if(F){
   plotQQunif(res)
   plotResiduals(res)
   check_residuals(m3_t_nostrata)
-  #DECISSION: GOOD residuals
+  #DECISION: GOOD residuals
   
   #SKIP, cannot include vegpresence as fixed effect
   if (F){
@@ -1788,7 +1825,7 @@ if(F){
   em<- emmeans(m4_t_vegpresence, ~ status, weights = "proportional")
   summary(em)
   pairs(em)
-  #DECISSION: 
+  #DECISION: 
 }
 
 
@@ -1841,7 +1878,7 @@ res<- simulateResiduals(m1_gaus_nostrata)
 plotQQunif(res)
 plotResiduals(res)
 check_residuals(m1_gaus_nostrata)
-#DECISSION: GOOD residuals 
+#DECISION: GOOD residuals 
 
 
 #Vegetation presence: gaussian, status, season and veg presence as fixed, subsite as random
@@ -1859,7 +1896,7 @@ res<- simulateResiduals(m2_gaus_vegpresence)
 plotQQunif(res)
 plotResiduals(res)
 check_residuals(m2_gaus_vegpresence)
-#DECISSION: GOOD residuals
+#DECISION: GOOD residuals
 
 
 #SKIP t-family options, Gaussian already good
@@ -1882,7 +1919,7 @@ check_residuals(m3_t_nostrata)
 em<- emmeans(m3_t_nostrata, ~ status, weights = "equal")
 summary(em)
 pairs(em)
-#DECISSION:
+#DECISION:
 
 
 #Vegetation presence: t_family, status, season and veg presence as fixed, subsite as random
@@ -1902,7 +1939,7 @@ check_residuals(m4_t_vegpresence)
 em<- emmeans(m4_t_vegpresence, ~ status, weights = "proportional")
 summary(em)
 pairs(em)
-#DECISSION:
+#DECISION:
 }
 
 #Compare models 
@@ -1958,7 +1995,7 @@ res<- simulateResiduals(m1_gaus_nostrata)
 plotQQunif(res)
 plotResiduals(res)
 check_residuals(m1_gaus_nostrata)
-#DECISSION: Good residuals, keep
+#DECISION: Good residuals, keep
 
 
 
@@ -1976,7 +2013,7 @@ res<- simulateResiduals(m2_gaus_vegpresence)
 plotQQunif(res)
 plotResiduals(res)
 check_residuals(m2_gaus_vegpresence)
-#DECISSION: BAD residuals
+#DECISION: BAD residuals
 
 
   #T_family:
@@ -1994,7 +2031,7 @@ check_residuals(m2_gaus_vegpresence)
   plotQQunif(res)
   plotResiduals(res)
   check_residuals(m3_t_nostrata)
-  #DECISSION: Good residuals
+  #DECISION: Good residuals
   
   
   #Vegetation presence: t_family, status, season and veg presence as fixed, subsite as random
@@ -2011,7 +2048,7 @@ check_residuals(m2_gaus_vegpresence)
   plotQQunif(res)
   plotResiduals(res)
   check_residuals(m4_t_vegpresence)
-  #DECISSION: Good  residuals
+  #DECISION: Good  residuals
   
 
 #Compare models 
@@ -2066,7 +2103,7 @@ res<- simulateResiduals(m1_gaus_nostrata)
 plotQQunif(res)
 plotResiduals(res)
 check_residuals(m1_gaus_nostrata)
-#DECISSION: BAD residuals
+#DECISION: BAD residuals
 
 
 #Vegetation presence: gaussian, status, season and veg presence as fixed, subsite as random
@@ -2084,7 +2121,7 @@ res<- simulateResiduals(m2_gaus_vegpresence)
 plotQQunif(res)
 plotResiduals(res)
 check_residuals(m2_gaus_vegpresence)
-#DECISSION: BAD residuals
+#DECISION: BAD residuals
 
 
   #T_family:
@@ -2103,7 +2140,7 @@ check_residuals(m2_gaus_vegpresence)
   plotQQunif(res)
   plotResiduals(res)
   check_residuals(m3_t_nostrata)
-  #DECISSION: Good enough residuals
+  #DECISION: Good enough residuals
   
   
   #Vegetation presence: t_family, status, season and veg presence as fixed, subsite as random
@@ -2121,7 +2158,7 @@ check_residuals(m2_gaus_vegpresence)
   plotQQunif(res)
   plotResiduals(res)
   check_residuals(m4_t_vegpresence)
-  #DECISSION: GOOD residuals
+  #DECISION: GOOD residuals
 
 #Compare models 
 anova(m3_t_nostrata,m4_t_vegpresence)
@@ -2172,7 +2209,7 @@ res<- simulateResiduals(m1_gaus_nostrata)
 plotQQunif(res)
 plotResiduals(res)
 check_residuals(m1_gaus_nostrata)
-#DECISSION: Bad residuals
+#DECISION: Bad residuals
 
 
 #Vegetation presence: gaussian, status, season and veg presence as fixed, subsite as random
@@ -2190,7 +2227,7 @@ res<- simulateResiduals(m2_gaus_vegpresence)
 plotQQunif(res)
 plotResiduals(res)
 check_residuals(m2_gaus_vegpresence)
-#DECISSION: BAD residuals
+#DECISION: BAD residuals
 
 
 
@@ -2210,7 +2247,7 @@ res<- simulateResiduals(m3_t_nostrata)
 plotQQunif(res)
 plotResiduals(res)
 check_residuals(m3_t_nostrata)
-#DECISSION: Better residuals, although they still have issues
+#DECISION: Better residuals, although they still have issues
 
 
 #Vegetation presence: t_family, status, season and veg presence as fixed, subsite as random
@@ -2279,7 +2316,7 @@ res<- simulateResiduals(m1_gaus_nostrata)
 plotQQunif(res)
 plotResiduals(res)
 check_residuals(m1_gaus_nostrata)
-#DECISSION: Bad residuals
+#DECISION: Bad residuals
 
 
 #Vegetation presence: gaussian, status, season and veg presence as fixed, subsite as random
@@ -2297,7 +2334,7 @@ res<- simulateResiduals(m2_gaus_vegpresence)
 plotQQunif(res)
 plotResiduals(res)
 check_residuals(m2_gaus_vegpresence)
-#DECISSION: GOOD-enough residuals
+#DECISION: GOOD-enough residuals
 
 
   #T_family:
@@ -2315,7 +2352,7 @@ check_residuals(m2_gaus_vegpresence)
   plotQQunif(res)
   plotResiduals(res)
   check_residuals(m3_t_nostrata)
-  #DECISSION: DOES NOT CONVERGE
+  #DECISION: DOES NOT CONVERGE
   
   
   #Vegetation presence: t_family, status, season and veg presence as fixed, subsite as random
@@ -2332,7 +2369,7 @@ check_residuals(m2_gaus_vegpresence)
   plotQQunif(res)
   plotResiduals(res)
   check_residuals(m4_t_vegpresence)
-  #DECISSION: good-enough
+  #DECISION: good-enough
 
 #Compare models 
 anova(m1_gaus_nostrata,m2_gaus_vegpresence)
@@ -2383,7 +2420,7 @@ res<- simulateResiduals(m1_gaus_nostrata)
 plotQQunif(res)
 plotResiduals(res)
 check_residuals(m1_gaus_nostrata)
-#DECISSION: GOOD residuals
+#DECISION: GOOD residuals
 
 
 #SKIP! cannot include vegpresence as fixed with status, and gaus is already good
@@ -2403,7 +2440,7 @@ if(F){
   plotQQunif(res)
   plotResiduals(res)
   check_residuals(m2_gaus_vegpresence)
-  #DECISSION: 
+  #DECISION: 
 
 #SKIP t_options: 
 
@@ -2422,7 +2459,7 @@ res<- simulateResiduals(m3_t_nostrata)
 plotQQunif(res)
 plotResiduals(res)
 check_residuals(m3_t_nostrata)
-#DECISSION:
+#DECISION:
 
 #SKIP, cannot include vegpresence as fixed effect
   #Vegetation presence: t_family, status, season and veg presence as fixed, subsite as random
@@ -2440,7 +2477,7 @@ check_residuals(m3_t_nostrata)
   plotQQunif(res)
   plotResiduals(res)
   check_residuals(m4_t_vegpresence)
-  #DECISSION: 
+  #DECISION: 
 }
 
 #Compare models: gaussian simple is already the best 
@@ -2492,7 +2529,7 @@ res<- simulateResiduals(m1_gaus_nostrata)
 plotQQunif(res)
 plotResiduals(res)
 check_residuals(m1_gaus_nostrata)
-#DECISSION: BAD residuals 
+#DECISION: BAD residuals 
 
 
 #Vegetation presence: gaussian, status, season and veg presence as fixed, subsite as random
@@ -2510,7 +2547,7 @@ res<- simulateResiduals(m2_gaus_vegpresence)
 plotQQunif(res)
 plotResiduals(res)
 check_residuals(m2_gaus_vegpresence)
-#DECISSION: BAD residuals 
+#DECISION: BAD residuals 
 
 
   #T_family:
@@ -2528,7 +2565,7 @@ check_residuals(m2_gaus_vegpresence)
   plotQQunif(res)
   plotResiduals(res)
   check_residuals(m3_t_nostrata)
-  #DECISSION: DOES NOT CONVERGE
+  #DECISION: DOES NOT CONVERGE
   
   
   #Vegetation presence: t_family, status, season and veg presence as fixed, subsite as random
@@ -2545,7 +2582,7 @@ check_residuals(m2_gaus_vegpresence)
   plotQQunif(res)
   plotResiduals(res)
   check_residuals(m4_t_vegpresence)
-  #DECISSION:GOOD residuals
+  #DECISION:GOOD residuals
 
 #Compare models 
 anova(m1_gaus_nostrata,m4_t_vegpresence)
@@ -2620,7 +2657,9 @@ complexmodel_resid_diag_summary <- summarize_dharma_diagnostics(complexmodel_lis
 
 
 ##3.2. Significance of effects-----
-#Effect of status will first be assessed via Anova (best_model,type=3): is there an effect averaging across all seasons? yes/no, is the effect dependent on season?, is the effect depenent on vegpresence? 
+#Effect of status will first be assessed via Anova (best_model,type=3): is there
+#an effect averaging across all seasons? yes/no, is the effect dependent on
+#season?, is the effect depenent on vegpresence?
 
 #Obtain significance for main effects of best_models
 simplemodel_results_anova<-get_all_anova_results(simplemodel_list_allghg)
@@ -2652,13 +2691,21 @@ write.csv(x = complexmodel_resid_diag_summary, file = paste0(path_2_modeloutputs
 
 ##3.3. EMEANs & post-hoc----
 
-#When calculating emmeans: I have to use the full variance-covariance structure to get accurate SEs. 
-#If the model is gaussian, we use t-test with Degrees of freedom available (via Satterthwaite approximation)
-#IF the model is t_family, it will have Inf df, not an issue but forces to use z-test for post-hocs instead (No DF calculation possible)
+#When calculating emmeans: I have to use the full variance-covariance structure
+#to get accurate SEs. If the model is gaussian, we use t-test with Degrees of
+#freedom available (via Satterthwaite approximation) IF the model is t_family,
+#it will have Inf df, not an issue but forces to use z-test for post-hocs
+#instead (No DF calculation possible)
 
-#CLDs (group letters) should be assigned to emmeans based on the above pairwise tests, do not repeat the test, but assign letters based on already calcualted tests via (multcompLetters function). Additionally, re-code letters so that they give emmean ranking info (letter "a" denotes the smallest-emmean significant group, letter"b" the signficant group with the next lowest emmean
+#CLDs (group letters) should be assigned to emmeans based on the above pairwise
+#tests, do not repeat the test, but assign letters based on already calcualted
+#tests via (multcompLetters function). Additionally, re-code letters so that
+#they give emmean ranking info (letter "a" denotes the smallest-emmean
+#significant group, letter"b" the signficant group with the next lowest emmean
 
-#Calculate relevant emmeans and post-hocs tests: separately for simple model list (status*season, only for RI) and complex model list (status*season*vegpresence, for rest of casepilots)
+#Calculate relevant emmeans and post-hocs tests: separately for simple model
+#list (status*season, only for RI) and complex model list
+#(status*season*vegpresence, for rest of casepilots)
 
 
 
@@ -3043,15 +3090,21 @@ custom_pairwise_contrasts_fullvcov <- function(
 
 #Only applicable to RI
 
-#Emmeans are extracted, pairwise tests done (based on model distribution family), CLDs are assigned to significantly different groups (and re-ordered based on emmean ranking). WE save both pairwise post-hoc tests in original (model scale) and back-transformed scales; AND emmeanCLDs in original and back-transformed scales. 
+#Emmeans are extracted, pairwise tests done (based on model distribution
+#family), CLDs are assigned to significantly different groups (and re-ordered
+#based on emmean ranking). WE save both pairwise post-hoc tests in original
+#(model scale) and back-transformed scales; AND emmeanCLDs in original and
+#back-transformed scales.
 
-#Equal Weights used for all EMMs: this assumes that all seasons and all status have the same weight for each other (appropriate). 
+#Equal Weights used for all EMMs: this assumes that all seasons and all status
+#have the same weight for each other (appropriate).
 
 
 #Initialize simple model results list
 simple_comparison_list<- list()
 
-# Loop to extract all emmeans and perform pairwise tests for appropriate comparisons for every casepilot*ghg simple model. 
+# Loop to extract all emmeans and perform pairwise tests for appropriate
+# comparisons for every casepilot*ghg simple model.
 
 for (dataset in names(simplemodel_list_allghg)) {
   #get model
@@ -3063,7 +3116,8 @@ for (dataset in names(simplemodel_list_allghg)) {
   casepilot_name<- sub("_.*", "", dataset)
   ghgspecies<- sub(paste0(casepilot_name,"_"),"",dataset)
   
-  # Obtain emmean object for each comparison: status, season, status_within_season. Using custom function for consistency. 
+  # Obtain emmean object for each comparison: status, season,
+  # status_within_season. Using custom function for consistency.
   status_emmeans <- custom_weighted_emmeans_backtrans(
     model_object = cp_model, trans_object = cp_trans_obj,
     grouping_vars = c("status"),
@@ -3144,7 +3198,9 @@ rm(all_contrasts,all_emmeans, cp_model,cp_trans_obj, casepilot_name, ghgspecies,
 
 
 #Get pairwise posthoc tests (in model scale): 
-#T-test or Z-test depending on model distribution family used (automatically assigned by contrasts (method="pairwise)). p.value is was adjusted for multiple comparisons sidak 
+#T-test or Z-test depending on model distribution family used (automatically
+#assigned by contrasts (method="pairwise)). p.value is was adjusted for multiple
+#comparisons sidak
 simplemodel_posthoc_tests <- purrr::map_dfr(simple_comparison_list, "posthoc_comparisons") %>%
   #Identify the model_distribution based on df estimation:
   mutate(model_distribution=if_else(df==Inf, "t_family", "gaussian")) %>% 
@@ -3196,7 +3252,8 @@ simplemodel_emmeans<- purrr::map_dfr(simple_comparison_list, "emmeans_og")
 
 #Add CLD and back transform emmeans
 simplemodel_emmeansCLD <- simplemodel_emmeans %>%
-  #ADD CLD group-letters (re-coding them so that "a" always identifies the significant group with lowest emmean, b the next lowest emmean, and so on...)
+  #ADD CLD group-letters (re-coding them so that "a" always identifies the
+  #significant group with lowest emmean, b the next lowest emmean, and so on...)
   left_join(CLD_letters, by = c("status", "comparison", "ghgspecies", "casepilot", "season")) %>%
   #Separate each comparison group to do the letter re-coding
   group_split(casepilot, ghgspecies, comparison, seasonlevel) %>%
@@ -3234,28 +3291,52 @@ write.csv(x = simplemodel_emmeansCLD, file = paste0(path_2_modeloutputs,"Emmeans
 
 #Complex models (ok)------
 
-#We need to take into account the proportion of vegpresence in the field to estimate the status, season and status_within_season emmeans. For status_within_vegpresence, equal weights should be applied (to give equal importance to each season). 
+#We need to take into account the proportion of vegpresence in the field to
+#estimate the status, season and status_within_season emmeans. For
+#status_within_vegpresence, equal weights should be applied (to give equal
+#importance to each season).
 
-#Overall status: weights should be used to account for different vegpresence in different status and  season, but all seasons should have the same combined weight for status emmeans and comparisons (to give the same importance to each season regardless of how small deviations in number of observations between seasons)
+#Overall status: weights should be used to account for different vegpresence in
+#different status and  season, but all seasons should have the same combined
+#weight for status emmeans and comparisons (to give the same importance to each
+#season regardless of how small deviations in number of observations between
+#seasons)
 
 #RATIONALE FOR CUSTOM WEIGHTS:
-#WE NEED TO APPLY weights to scale the vegpresence effects according to their proportion in the field. This applies for comparisions: status, season, and status_within_season. For status_within_vegpresence comparisons, equal weights should be applied (to give equal importance to each season). 
-#Weights should be calculated as the proportion of veg/noveg in every combination of status*season so they sum 1 (and give equal importance to all seasons).
-#The function "custom_weighted_emmeans" already re-normalizes the weigths as needed (for status and for season emmeans, no need to re-normalize for status*season. It calculates the associated weighted SE taking into account the variance-covariance structure of the model.
+#WE NEED TO APPLY weights to scale the vegpresence effects according to their
+#proportion in the field. This applies for comparisions: status, season, and
+#status_within_season. For status_within_vegpresence comparisons, equal weights
+#should be applied (to give equal importance to each season). Weights should be
+#calculated as the proportion of veg/noveg in every combination of status*season
+#so they sum 1 (and give equal importance to all seasons). The function
+#"custom_weighted_emmeans" already re-normalizes the weigths as needed (for
+#status and for season emmeans, no need to re-normalize for status*season. It
+#calculates the associated weighted SE taking into account the
+#variance-covariance structure of the model.
 
-#Status comparison: each status estimate is calculated taking into account its particular vegpresence composition while giving equal importance to all seasons.
+#Status comparison: each status estimate is calculated taking into account its
+#particular vegpresence composition while giving equal importance to all
+#seasons.
 
-#Season comparison: each seasonal estimate is calculated taking into account the seasonally variable vegpresence composition, while giving equal importance to all status (overall seasonal effect across all status).
+#Season comparison: each seasonal estimate is calculated taking into account the
+#seasonally variable vegpresence composition, while giving equal importance to
+#all status (overall seasonal effect across all status).
 
-#Status_within_season comparison: each seasonal estimate of each status takes into account its particular vegpresence composition. 
+#Status_within_season comparison: each seasonal estimate of each status takes
+#into account its particular vegpresence composition.
 
-#For status_within_vegpresence, we are only averaging across season and we want to have equal impact of all seasons (overall yearly effect), use weights="equal".
+#For status_within_vegpresence, we are only averaging across season and we want
+#to have equal impact of all seasons (overall yearly effect), use
+#weights="equal".
 
 
 ##Calculate weights------
 #First, calculate vegpresence proportions at every level of casepilot, status and season 
 
-#With weights calculated from chamber distribution, emmeans are proportional to the data used to fit the model, with the exception that different N across seasons does not influence the importance of each season in the status emmean (all season treated equally).
+#With weights calculated from chamber distribution, emmeans are proportional to
+#the data used to fit the model, with the exception that different N across
+#seasons does not influence the importance of each season in the status emmean
+#(all season treated equally).
 {
 casepilot_weights<- data4models %>% 
   dplyr::select(plotcode, casepilot, season, status, vegpresence, subsite) %>% 
@@ -3275,7 +3356,11 @@ casepilot_weights<- data4models %>%
   dplyr::group_by(casepilot, status, season, vegpresence) %>% 
   summarise(prop_weight=mean(proportions, na.rm = T), .groups = "drop")
 
-#For CURONIAN: Calculate overall veg/noveg of curonian, across status and seasons. No seasonal variability was observed in vegetation extent, additionally due to initial incorrect restored site boundaries, the proportions of vegpresence in these sites are not representative of actual site composition. We use constant average proportion across all status and seasons. 
+#For CURONIAN: Calculate overall veg/noveg of curonian, across status and
+#seasons. No seasonal variability was observed in vegetation extent,
+#additionally due to initial incorrect restored site boundaries, the proportions
+#of vegpresence in these sites are not representative of actual site
+#composition. We use constant average proportion across all status and seasons.
 cu_weights<- data4models %>% 
   filter(casepilot=="CU") %>% 
   group_by(plotcode, casepilot,vegpresence) %>% 
@@ -3290,7 +3375,8 @@ cu_weights<- data4models %>%
          `Non-vegetated`=`Non-vegetated`/sum_all) %>% 
   dplyr::select(-sum_all)
 
-#Override CU composition: constant actual composition, differences in chamber deployment are due to systematic sampling biass in Restored sites
+#Override CU composition: constant actual composition, differences in chamber
+#deployment are due to systematic sampling biass in Restored sites
 casepilot_weights<-casepilot_weights %>% 
   mutate(prop_weight=if_else(casepilot=="CU"&vegpresence=="Vegetated", cu_weights %>% pull(`Vegetated`),prop_weight),
          prop_weight=if_else(casepilot=="CU"&vegpresence=="Non-vegetated",cu_weights %>% pull(`Non-vegetated`),prop_weight))
@@ -3304,7 +3390,8 @@ casepilot_weights<-casepilot_weights %>%
 #Intialize list for complex models
 complex_comparison_list<- list()
 
-# Loop to extract all emmeans and perform pairwise tests for appropriate comparisons for every casepilot complexbestmodel. 
+# Loop to extract all emmeans and perform pairwise tests for appropriate
+# comparisons for every casepilot complexbestmodel.
 for (dataset in names(complexmodel_list_allghg)) {
   #get model
   cp_model <- complexmodel_list_allghg[[dataset]]
@@ -3419,7 +3506,9 @@ rm(all_contrasts,all_emmeans, cp_model, cp_trans_obj, casepilot_name, ghgspecies
 
 
 #Get pairwise posthoc tests (in model scale and back-transformed): 
-#T-test or Z-test depending on model distribution family used (automatically assigned by contrasts (method="pairwise)). p.value is adjusted for multiple comparisons sidak 
+#T-test or Z-test depending on model distribution family used (automatically
+#assigned by contrasts (method="pairwise)). p.value is adjusted for multiple
+#comparisons sidak
 complexmodel_customweight_posthoc_tests <- purrr::map_dfr(complex_comparison_list, "posthoc_comparisons") %>%
   #Identify the test used (and model_distribution) based on df estimation:
   mutate(model_distribution=if_else(df==Inf, "t_family", "gaussian")) %>% 
@@ -3474,7 +3563,8 @@ complexmodel_customweight_emmeans<- purrr::map_dfr(complex_comparison_list, "emm
 
 #Add CLD and back transform emmeans
 complexmodel_customweight_emmeansCLD <- complexmodel_customweight_emmeans %>%
-  #ADD CLD group-letters (re-coding them so that "a" always identifies the significant group with lowest emmean, b the next lowest emmean, and so on...)
+  #ADD CLD group-letters (re-coding them so that "a" always identifies the
+  #significant group with lowest emmean, b the next lowest emmean, and so on...)
   left_join(CLD_letters, by = c("status", "comparison", "ghgspecies", "casepilot", "season","vegpresence")) %>%
   #Separate each comparison group to do the letter re-coding
   group_split(casepilot, ghgspecies, comparison, seasonlevel,vegpresencelevel) %>%
