@@ -1,9 +1,6 @@
 #Prepare chamber data for modeling
 
-#Author: Miguel Cabrera-Brufau
 #Date: September 2025
-#Project: Restore4cs
-
 
 
 #Description----

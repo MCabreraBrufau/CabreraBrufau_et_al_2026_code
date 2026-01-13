@@ -1,8 +1,6 @@
 #GHGpaper_figures
 
-#Author: Miguel Cabrera-Brufau
 #Date: September 2025
-#Project: Restore4cs
 
 #Description----
 #This scrip is used to produce the figures and data-tables included in the manuscript

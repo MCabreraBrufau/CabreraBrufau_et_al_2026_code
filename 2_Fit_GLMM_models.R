@@ -1,8 +1,6 @@
 #GHGpaper_modelchamberdata.R
 
-#Author: Miguel Cabrera-Brufau
 #Date: September 2025
-#Project: Restore4cs
 
 
 #Description----
