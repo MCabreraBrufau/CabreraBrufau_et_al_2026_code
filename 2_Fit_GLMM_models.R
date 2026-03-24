@@ -6,12 +6,12 @@
 #Description----
 #This scrip is used to model the effect of restoration in each casepilot. Using
 #net daily GHG exchange rates of appropriate incubations, data preparation is in
-#GHGpaper_prepChamberData.R script.
+#1_Prepare_Data.R script.
 
 
 #DECISIONS: 
   #Pooling of non-vegetated strata: due to seasonal variability and
-  #site-specific differences, using the 3 original strata classes is impossible
+  #site-specific differences, using the 3 original sampling strata classes is impossible
   #(would lead to to rank-deficient models for some combinations). Instead we
   #group them into vegpresence: vegetated or not-vegetated
   
@@ -1660,8 +1660,8 @@ m2_gaus_vegpresence<- glmmTMB(formula = dailyflux_trans~status*season*vegpresenc
                               family = gaussian(),
                               dispformula = ~1)
 #Evaluate model:
-check_convergence(m2_gaus_vegpresence) #OK
-check_singularity(m2_gaus_vegpresence,tolerance = 1e-8) #Singular
+check_convergence(m2_gaus_vegpresence)
+check_singularity(m2_gaus_vegpresence,tolerance = 1e-8)
 r2(m2_gaus_vegpresence, tolerance = 1e-10)
 Anova(m2_gaus_vegpresence)
 summary(m2_gaus_vegpresence)
