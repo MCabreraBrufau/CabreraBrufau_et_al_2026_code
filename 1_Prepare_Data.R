@@ -150,13 +150,28 @@ ghg_best<- co2_best %>%
 rm(co2_all, co2_best, ch4_all, ch4_best)
 
 
+
 #2. Import harm. field Obs.------
 
-#Harmonized field observations per UniqueID
-fieldobs_uniqueID<-read.csv(paste0(path_0_sourcedata,"UniqueID_harmonized_field_obs.csv"))
+#Import harmonized field observations, one row per chamber deployment (including 1 or 2 incubation "UniqueID"s, dark or transparent)
 
-#Harmonized field observations per plotcode 
+#Harmonized field observations per plotcode (per chamber deployment)
 fieldobs_plotcode<- read.csv(paste0(path_0_sourcedata,"plotcode_harmonized_field_obs.csv"))
+
+#Check correspondence between fieldobs_plotcode and ghg_best
+plotharm_IDs<- unique(c(fieldobs_plotcode$dark_UniqueID, fieldobs_plotcode$transparent_UniqueID))
+plotharm_IDs<- plotharm_IDs[!is.na(plotharm_IDs)] #exclude NA (originating from absence of transparent or dark incubation)
+
+ghgbest_IDs<- ghg_best %>% select(UniqueID) %>% distinct() %>% pull(UniqueID)
+
+#field-obs without ghg_best row: 
+plotharm_IDs[which(!(plotharm_IDs%in%ghgbest_IDs))]
+#These seven incubations do not contain any flux (instruments were not working when performed, they appear in plotcode but no data is available for them), they are kept as NA fluxes in final dataset, as they inform of the strata distribution of sites.
+
+#ghg-best-rows without field-obs: 
+ghgbest_IDs[which(!(ghgbest_IDs%in%plotharm_IDs))]
+#These 27 incubations correspond always to "extra" incubations performed in vegetated areas after removing the vegetation, non representative, implicitly excluded due to not being present in fieldobs_plotcode. 
+
 
 
 #3. Filter valid incubations-----
@@ -166,49 +181,66 @@ fieldobs_plotcode<- read.csv(paste0(path_0_sourcedata,"plotcode_harmonized_field
 #representative of natural conditions
 
 # 1. Remove rising-tide and receding-tide incubations. (non appropriate fluxes for comparisons)
-tidal_IDs<- fieldobs_uniqueID %>% filter(grepl("rising-tide|receding-tide", field_observations)) %>% pull(UniqueID)
+tidal_IDs <- fieldobs_plotcode %>%
+  filter(grepl("rising-tide|receding-tide", field_observations)) %>%
+  select(transparent_UniqueID, dark_UniqueID) %>%
+  pivot_longer(cols = everything(), values_to = "UniqueID") %>%
+  pull(UniqueID) %>%
+  na.omit()
 
-# 2. Remove "bare after vegetation removal" (non-appropriate for comparisons)  
-vegcut_IDs<- fieldobs_uniqueID %>% filter(grepl("after vegetation removal", field_observations)) %>% pull(UniqueID)
-
-# 3. Remove incubations in non-appropriate strata (according to subsite definition)
-#3.1. Camargue (CA): NOTHING TO REMOVE, all incubations are in appropriate strata
+# 2.  Remove incubations in non-appropriate strata (according to subsite definition)
+#2.1. Camargue (CA): NOTHING TO REMOVE, all incubations are in appropriate strata
 CA_wrongstrata_IDs<- c()
 
-#3.2. Curonian lagoon (CU): inconsistent bare representation (bare sediments
+#2.2. Curonian lagoon (CU): inconsistent bare representation (bare sediments
 #(beach) wrongly considered for restored sites, never for preserved or altered,
 #not appropriate for comparisons). Only vegetated and open water areas are part
 #of the sites sensu-stricto.
-CU_wrongstrata_IDs<- fieldobs_uniqueID %>% filter(casepilot=="CU") %>% filter(strata=="bare") %>% pull(UniqueID)
-
-#3.3. Danube delta (DA): inconsistent strata in some samplings: exclude
+CU_wrongstrata_IDs<- fieldobs_plotcode %>% filter(casepilot=="CU") %>% filter(strata=="bare") %>%
+  select(transparent_UniqueID, dark_UniqueID) %>%
+  pivot_longer(cols = everything(), values_to = "UniqueID") %>%
+  pull(UniqueID) %>%
+  na.omit()
+#2.3. Danube delta (DA): inconsistent strata in some samplings: exclude
 #vegetated of S3-DA-A2 (less than 10% of site, not representative), exclude bare
 #of S1-DA-R2 (sampled during first campaign but less than 10% of site)
-DA_wrongstrata_IDs<- fieldobs_uniqueID %>% filter(casepilot=="DA") %>% 
-  filter((sampling=="S3-DA-A2"&strata=="vegetated")|(sampling=="S1-DA-R2"&strata=="bare")) %>% 
-  pull(UniqueID)
+DA_wrongstrata_IDs<- fieldobs_plotcode %>% filter(casepilot=="DA") %>% 
+  filter((sampling=="S3-DA-A2"&strata=="vegetated")|(sampling=="S1-DA-R2"&strata=="bare")) %>%
+  select(transparent_UniqueID, dark_UniqueID) %>%
+  pivot_longer(cols = everything(), values_to = "UniqueID") %>%
+  pull(UniqueID) %>%
+  na.omit()
 
-#3.4. Dutch delta (DU): NOTHING TO REMOVE, all incubations are in appropriate strata
+#2.4. Dutch delta (DU): NOTHING TO REMOVE, all incubations are in appropriate strata
 DU_wrongstrata_IDs<- c()
 
-#3.5. Ria d'Aveiro (RI): rising-tide and "after vegetation removal" already
+#2.5. Ria d'Aveiro (RI): rising-tide and "after vegetation removal" already
 #removed. Inconsistent incubations: tidal-pool incubations in S3-RI-A1 (only
 #considered in S3, less than 10% of site), bare incubations in RI-R1 and in
 #RI-R2 (wrong extra-incubations, restored sites are 100% vegetated by
 #definition)
-RI_wrongstrata_IDs<- fieldobs_uniqueID %>% filter(casepilot=="RI") %>% 
-  filter((sampling=="S3-RI-A1"&grepl("tidal-pool", field_observations))|(subsite=="RI-R1"&strata=="bare")|(subsite=="RI-R2"&strata=="bare")) %>% pull(UniqueID)
+RI_wrongstrata_IDs<- fieldobs_plotcode %>% filter(casepilot=="RI") %>% 
+  filter((sampling=="S3-RI-A1"&grepl("tidal-pool", field_observations))|(subsite=="RI-R1"&strata=="bare")|(subsite=="RI-R2"&strata=="bare")) %>%
+  select(transparent_UniqueID, dark_UniqueID) %>%
+  pivot_longer(cols = everything(), values_to = "UniqueID") %>%
+  pull(UniqueID) %>%
+  na.omit()
 
-#3.6. Valencian wetland (VA): NOTHING TO REMOVE, all incubations are in appropriate strata
+#2.6. Valencian wetland (VA): NOTHING TO REMOVE, all incubations are in appropriate strata
 VA_wrongstrata_IDs<-c()
 
-#ONLY valid incubation details
-valid_fieldobs_uniqueID<- fieldobs_uniqueID %>% 
-  filter(!UniqueID%in%c(tidal_IDs,vegcut_IDs,CA_wrongstrata_IDs,CU_wrongstrata_IDs,DA_wrongstrata_IDs,DU_wrongstrata_IDs,RI_wrongstrata_IDs,VA_wrongstrata_IDs))
+#Combine all IDs that need to be excluded: 
+IDs_toexclude<- c(tidal_IDs,
+                  CA_wrongstrata_IDs,CU_wrongstrata_IDs,DA_wrongstrata_IDs,DU_wrongstrata_IDs,RI_wrongstrata_IDs,VA_wrongstrata_IDs)
 
+
+#Filter-out the field observations with incubation UniqueIDs that need exclusion: 
+valid_fieldobs_plotcode<- fieldobs_plotcode %>% 
+  filter(!dark_UniqueID%in%IDs_toexclude) %>% 
+  filter(!transparent_UniqueID%in%IDs_toexclude)
 
 #Check number and proportion of chamber deployments (plotcodes) excluded from further analysis: 
-valid_plotcodes<- valid_fieldobs_uniqueID %>% dplyr::select(plotcode) %>% distinct() %>% pull(plotcode)
+valid_plotcodes<- valid_fieldobs_plotcode %>% dplyr::select(plotcode) %>% distinct() %>% pull(plotcode)
 
 plotcodes_with_bestflux<- ghg_best %>% 
   filter(!is.na(co2_best)|!is.na(ch4_best)) %>% 
@@ -233,17 +265,15 @@ n_all_plotcodes_with_bestflux-n_valid_plotcodes_with_bestflux
 round((n_all_plotcodes_with_bestflux-n_valid_plotcodes_with_bestflux)/n_all_plotcodes_with_bestflux*100,1)
 
 #PLotcodes with valid flux excluded due to tidal behaviour
-fieldobs_uniqueID %>% 
+fieldobs_plotcode %>% 
   filter(plotcode%in%plotcodes_with_bestflux) %>% 
-  filter(UniqueID%in%tidal_IDs) %>% #Tidal behaviour
+  filter((dark_UniqueID%in%tidal_IDs)|(transparent_UniqueID%in%tidal_IDs)) %>% #Tidal behaviour
   dplyr::select(plotcode) %>% distinct() %>% dim() 
 #Rest of excluded plotcodes are due to other reasons (performed in non representative conditions, outside site boundaries,...)
 
 
-rm(tidal_IDs,vegcut_IDs,CA_wrongstrata_IDs,CU_wrongstrata_IDs,DA_wrongstrata_IDs,DU_wrongstrata_IDs,RI_wrongstrata_IDs,VA_wrongstrata_IDs)
+rm(tidal_IDs,CA_wrongstrata_IDs,CU_wrongstrata_IDs,DA_wrongstrata_IDs,DU_wrongstrata_IDs,RI_wrongstrata_IDs,VA_wrongstrata_IDs)
 
-valid_plotcodes<- valid_fieldobs_uniqueID %>% 
-  dplyr::select(plotcode, season, casepilot,subsite,sampling, strata) %>% distinct()
 
 
 
@@ -257,7 +287,7 @@ valid_plotcodes<- valid_fieldobs_uniqueID %>%
 #suncalc, median lat/long of each subsite and date of sampling)
 
 # get median coordinates per subsite (including all seasons)
-samplings <- valid_fieldobs_uniqueID %>% 
+samplings <- valid_fieldobs_plotcode %>% 
   dplyr::select(subsite, latitude, longitude) %>% 
   group_by(subsite) %>% 
   summarise(subsite_latitude=median(latitude,na.rm=T),
@@ -266,7 +296,7 @@ samplings <- valid_fieldobs_uniqueID %>%
 
 #Use dplyr and suncalc to calculate daylight hours for each subsite-date combination (each sampling).
 sampling_daylight <- samplings %>%
-  merge.data.frame(y=valid_fieldobs_uniqueID %>% dplyr::select(subsite, date,sampling), by="subsite", all=T) %>% 
+  merge.data.frame(y=valid_fieldobs_plotcode %>% dplyr::select(subsite, date,sampling), by="subsite", all=T) %>% 
   distinct() %>% 
   mutate(date=as.Date(date)) %>% 
   rowwise() %>%
@@ -291,12 +321,13 @@ sampling_daylight <- samplings %>%
 #Only 1 instantaneous flux --> used directly for daily flux
 #T+D available (due to phytobentos)--> scaling with daylight hours (T+D) = daily flux
 
-#get field details of valid plotcodes
-valid_plotcode_obs<- fieldobs_plotcode %>%
-  filter(plotcode%in%valid_plotcodes$plotcode) 
+valid_fieldobs_plotcode
 
 #Get ghg fluxes for transparent & dark by plotcode (only for valid UniqueIDs)
-valid_ghg_transpdark<- valid_fieldobs_uniqueID %>%
+valid_ghg_transpdark<- valid_fieldobs_plotcode %>%
+  pivot_longer(cols = c(dark_UniqueID,transparent_UniqueID),names_to = "lightcondition", values_to = "UniqueID") %>% 
+  filter(!is.na(UniqueID)) %>% 
+  mutate(transparent_dark=str_extract(string = lightcondition,pattern = "transparent|dark")) %>% 
   merge.data.frame(ghg_best, by="UniqueID", all.x = T) %>% 
   dplyr::select(plotcode, co2_best, ch4_best, transparent_dark) %>% 
   rename(co2=co2_best, ch4=ch4_best) %>% 
@@ -305,7 +336,7 @@ valid_ghg_transpdark<- valid_fieldobs_uniqueID %>%
 
 
 #Integrate to dailyflux
-daily_ghg_plotcode<- valid_plotcode_obs %>% 
+daily_ghg_plotcode<- valid_fieldobs_plotcode %>% 
   #Add daylight hours
   merge.data.frame(sampling_daylight, by=c("sampling"), all = T) %>% 
   dplyr::select(plotcode, season, casepilot, subsite, sampling, plot_num, date, plot_start_time, latitude, longitude, gas_analyzer, strata, water_depth, field_observations, ABG_veg_description, ABG_veg_biomass_gpersquaremeter, hours_day, hours_night) %>% 
@@ -343,7 +374,7 @@ daily_ghg_plotcode<- valid_plotcode_obs %>%
 
 
 #check how many non-vegetated chambers had 2 fluxes (transparent&dark)
-valid_plotcode_obs %>% 
+valid_fieldobs_plotcode %>% 
   filter(strata!="vegetated") %>% 
   mutate(n_incubations=(!is.na(dark_UniqueID))+!is.na(transparent_UniqueID)) %>% 
   dplyr::select(plotcode,n_incubations) %>% 
@@ -354,7 +385,7 @@ valid_plotcode_obs %>%
 
 
 #Delete objects already used
-rm(samplings, sampling_daylight, fieldobs_plotcode, fieldobs_uniqueID, valid_plotcode_obs, valid_plotcodes)
+rm(samplings, sampling_daylight, fieldobs_plotcode, valid_plotcodes)
 
 
 
@@ -396,3 +427,5 @@ data4models <- daily_ghg_plotcode %>%
 #Save formated and valid in-situ data to be used in paper. 
 write.csv(x = data4models, file = paste0(path_1_paperdata,"ChamberData4paper.csv"),row.names = F)
 }
+
+
