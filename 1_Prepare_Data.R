@@ -28,7 +28,7 @@
 
 #Inputs to script: 
 #Per-UniqueID: co2 and ch4 best fluxes (and se flux)
-#Per-UniqueID and per-plotcode harmonized field observations. 
+#Per-plotcode harmonized field observations. 
 
 #Outputs: 
 #ChamberData4paper.csv: containing valid daily fluxes of co2, ch4 and combined GWP (co2+ch4).
