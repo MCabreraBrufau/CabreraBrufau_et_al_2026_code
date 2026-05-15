@@ -1,6 +1,6 @@
 #GHGpaper_figures
 
-#Date: September 2025
+#Date: September 2025, updated in May 2026 after first round of review
 
 #Description----
 #This scrip is used to produce the figures and data-tables included in the manuscript
@@ -18,7 +18,6 @@
 
 
 rm(list = ls()) # clear workspace
-cat("/014") # clear console
 
 
 # ---- Packages ----
@@ -35,6 +34,7 @@ required_pkgs <- c("tidyverse",
                    "suncalc",
                    "cowplot",
                    "ggforce",
+                   "ragg",
                    "flextable",
                    "officer")
 
@@ -74,7 +74,7 @@ if (!dir.exists(path_supplementary)) {
 }
 
 
-{
+
 
 #____________________#------
 
@@ -88,9 +88,7 @@ data4paper<- data4paper %>%
   #Remove NAs
   filter(!is.na(dailyflux)) %>% 
   #Keep only ghg of interest
-  filter(ghgspecies%in%c("co2","ch4","gwp_co2andch4")) %>% 
-  #Rename to GWPco2andch4
-  mutate(ghgspecies=if_else(ghgspecies=="gwp_co2andch4","GWPco2andch4",ghgspecies)) %>% 
+  filter(ghgspecies%in%c("co2","ch4","gwp100","gwp20")) %>% 
   mutate(vegpresence=if_else(strata=="vegetated","Vegetated","Non-vegetated")) %>% 
   #Factor grouping variables:
   mutate(season=factor(season, levels = c("S1","S2","S3","S4"), ordered = T),
@@ -118,7 +116,7 @@ simplemodel_significances_alleffects<- simplemodel_summary %>%
 
 
 #Import Emmeans +SE + cld groupletters 
-simplemodel_emmeans_all<-read.csv(paste0(path_2_modeloutputs,"EmmeansCLD_RI_chambermodels.csv"))
+simplemodel_emmeans_all<-read.csv(paste0(path_2_modeloutputs,"EmmeansCLD_RI_chambermodels_boot.csv"))
 
 #Format Emmeans: filter for RI only & remove CLD group-letters from comparisons
 #when all are the same.
@@ -179,7 +177,7 @@ head(complexmodel_significances_alleffects)
 
 #Import Emmeans + cld groupletters (all ghgs Combined into single table)
 #Calculated with custom weights for vegpresence. 
-complexmodel_emmeans_all<-read.csv(paste0(path_2_modeloutputs,"EmmeansCLD_rest_chambermodels.csv"))
+complexmodel_emmeans_all<-read.csv(paste0(path_2_modeloutputs,"EmmeansCLD_rest_chambermodels_boot.csv"))
 
 #Remove CLD when all are the same within a given comparison (no differences)
 complexmodel_emmeans_all<- complexmodel_emmeans_all %>% 
@@ -258,13 +256,14 @@ str(bestmodel_emmeans_statuswithinvegpresence)
 
 ##General sampling stats-----
 #TOTAL number of non-na daily fluxes that compose the final dataset presented in the article: 
-#n for CO2, CH4 and GWP
+#n for CO2, CH4 and GWP (100 & 20y)
 data4paper %>% 
  dplyr::select(plotcode,dailyflux, ghgspecies) %>% 
   pivot_wider(names_from = ghgspecies, values_from = dailyflux) %>% 
   summarise(n_co2=sum(!is.na(co2)),
             n_ch4=sum(!is.na(ch4)),
-            n_gwp=sum(!is.na(GWPco2andch4)))
+            n_gwp100=sum(!is.na(gwp100)),
+            n_gwp20=sum(!is.na(gwp20)))
   
 #Chamber deployments
 plotcodes<- read.csv(paste0(path_0_sourcedata, "Plotcode_harmonized_field_obs.csv"))
@@ -351,17 +350,20 @@ plotcodes %>%
 
 ##GHG importance on CO2eq------
 
+
 #In data4paper, units are: Co2 (molperm2perday), ch4(millimolper m2 per day),
-#GWPco2andch4(gCO2eq per m2 per day)
+#gwp100 and gwp20 (gCO2eq per m2 per day)
 
 #Co2 to CO2 eq: mutliply by 44 to get gCO2eq
-#CH4 to CO2eq: divide by 1000 & multiply by 16 to get gCH4, then multiply by 28 to get CO2eq. 
+#CH4 to CO2 eq: divide by 1000 & multiply by 16 to get gCH4, then multiply by 
+#GWP factor (100y or 20y) to get gCO2eq. 
 
-ghgprop<- data4paper %>% 
+# 1st. GWP100y (CH4 factor = 27.0)
+ghgprop_100y<- data4paper %>% 
  dplyr::select(season, casepilot, subsite, sampling, status,plotcode, ghgspecies, dailyflux) %>% 
   pivot_wider(names_from = ghgspecies, values_from = dailyflux) %>% 
   mutate(co2=abs(co2*44),
-         ch4=abs((ch4/1000)*16*28),
+         ch4=abs((ch4/1000)*16*27), #using GWP 100 for CH4: 27.0 
          Co2eq_absolutesum=abs(co2)+abs(ch4),
          co2_prop=co2/Co2eq_absolutesum,
          ch4_prop=ch4/Co2eq_absolutesum) %>% 
@@ -374,19 +376,53 @@ ghgprop<- data4paper %>%
          sd_cpstatus_ch4prop=sd(ch4_prop, na.rm=T),
          n_cpstatus_ch4prop=sum(!is.na(ch4_prop)))
 
-#CH4 proportion of CO2eq in Preserved sites
-ghgprop %>% 
+# 2nd GWP20y (CH4 factor = 79.7)
+ghgprop_20y<- data4paper %>% 
+  dplyr::select(season, casepilot, subsite, sampling, status,plotcode, ghgspecies, dailyflux) %>% 
+  pivot_wider(names_from = ghgspecies, values_from = dailyflux) %>% 
+  mutate(co2=abs(co2*44),
+         ch4=abs((ch4/1000)*16*79.7), #using GWP 20 for CH4: 79.7 
+         Co2eq_absolutesum=abs(co2)+abs(ch4),
+         co2_prop=co2/Co2eq_absolutesum,
+         ch4_prop=ch4/Co2eq_absolutesum) %>% 
+  group_by(casepilot) %>% 
+  mutate(avg_cp_ch4prop=mean(ch4_prop,na.rm=T),
+         sd_cp_ch4prop=sd(ch4_prop, na.rm=T),
+         n_cp_ch4prop=sum(!is.na(ch4_prop))) %>% 
+  group_by(casepilot, status) %>% 
+  mutate(avg_cpstatus_ch4prop=mean(ch4_prop,na.rm=T),
+         sd_cpstatus_ch4prop=sd(ch4_prop, na.rm=T),
+         n_cpstatus_ch4prop=sum(!is.na(ch4_prop)))
+
+#CH4 proportion of CO2eq in Preserved sites (Results, end of 3.1 section)
+#gwp100
+ghgprop_100y %>% 
  dplyr::select(casepilot, status, avg_cpstatus_ch4prop,sd_cpstatus_ch4prop,n_cpstatus_ch4prop,
          avg_cp_ch4prop, sd_cp_ch4prop, n_cp_ch4prop) %>% 
   distinct() %>% 
   filter(status=="Preserved") %>% 
   transmute(casepilot, status, avg_cpstatus_ch4prop, sd_cpstatus_ch4prop, se_cpstatus_ch4prop=sd_cpstatus_ch4prop/sqrt(n_cpstatus_ch4prop))
 
+#gwp20
+ghgprop_20y %>% 
+  dplyr::select(casepilot, status, avg_cpstatus_ch4prop,sd_cpstatus_ch4prop,n_cpstatus_ch4prop,
+                avg_cp_ch4prop, sd_cp_ch4prop, n_cp_ch4prop) %>% 
+  distinct() %>% 
+  filter(status=="Preserved") %>% 
+  transmute(casepilot, status, avg_cpstatus_ch4prop, sd_cpstatus_ch4prop, se_cpstatus_ch4prop=sd_cpstatus_ch4prop/sqrt(n_cpstatus_ch4prop))
 
-#CH4 proportion across casepilots (including all Conservation status)
-ghgprop %>% 
+
+#CH4 proportion across casepilots including all Conservation status, (Discussion, end of 4.1 section)
+#gwp100
+ghgprop_100y %>% 
   ungroup() %>% 
  dplyr::select(casepilot, avg_cp_ch4prop, sd_cp_ch4prop, n_cp_ch4prop) %>% 
+  distinct()
+
+#gwp20
+ghgprop_20y %>% 
+  ungroup() %>% 
+  dplyr::select(casepilot, avg_cp_ch4prop, sd_cp_ch4prop, n_cp_ch4prop) %>% 
   distinct()
 
 
@@ -394,14 +430,27 @@ ghgprop %>%
 
 #2. Main Figures------
 
+#Preview function (saves and automatically opens the plot, useful to tweak final appearance)
+preview_png <- function(plot, filename = "preview.png",
+                        width = 90, height = 200, dpi = 400) {
+  ragg::agg_png(filename, width = width, height = height,
+                units = "mm", res = dpi)
+  print(plot)
+  dev.off()
+  utils::browseURL(filename)
+}
+
+
 ##Fig. 1 (Map)-----
 
 #Map produced outside R-enviroment
 
 
 ##Fig. 2 (Preserved Fluxes)-----
+
 #A 3-panel vertical plot. 1 panel per gas. Boxplot (without outliers). Linear scale. 
 #For CH4, inset with DU,RI,CA,VA zoomed in. 
+#For CO2eq, display GWP100 and GWP20 factors as side-by-side boxplots, identified by color
 
 base_co2_ident<-
   data4paper %>% 
@@ -414,9 +463,8 @@ base_co2_ident<-
     axis.text = element_text(face = "bold"),
     axis.text.x = element_text(angle = 0, vjust = 0.5, hjust=0.5))+
   guides(color = "none", fill="none")+
-  labs(y= expression(Daily~CO[2]~flux~(mmol~m^-2~d^-1)),
-       x=NULL,
-       fill=paste0("Status"))
+  labs(y= expression(CO[2]~flux~(mmol~m^-2~d^-1)),
+       x=NULL)
 
 
 
@@ -433,9 +481,8 @@ base_ch4_ident_main <- data4paper %>%
   ) +
   guides(color = "none", fill = "none") +
   labs(
-    y = expression(Daily~CH[4] ~ flux ~ (mmol~m^-2~d^-1)),
-    x = NULL,
-    fill = "Status"
+    y = expression(CH[4] ~ flux ~ (mmol~m^-2~d^-1)),
+    x = NULL
   )
 
 # Inset plot
@@ -480,19 +527,25 @@ base_ch4_ident_comb <- base_ch4_ident_main +
 
   
 base_gwp_ident<-data4paper %>% 
-  filter(status=="Preserved", ghgspecies%in%c("GWPco2andch4")) %>% 
+  filter(status=="Preserved", ghgspecies%in%c("gwp100","gwp20")) %>% 
+  mutate(gwpfactor= if_else(ghgspecies=="gwp100", "100y", "20y")) %>% 
   mutate(casepilot=factor(casepilot, levels = c("DU","RI","CA","VA","DA","CU"))) %>% 
-  ggplot(aes(x=casepilot, y=(dailyflux)))+
+  ggplot(aes(x=casepilot, y=(dailyflux), fill=gwpfactor))+
   geom_hline(yintercept=0, linetype="dashed")+
-  geom_boxplot(width=0.2,outliers = F, fill="#00BA38",size = 0.7)+
+  geom_boxplot(width=0.25, outliers = F, size = 0.7, position = position_dodge(width = 0.5))+
+  scale_fill_manual(name="GWP factor", values = c("100y"="darkorange", "20y"="yellow"))+
   theme_bw() +
   theme(
+    legend.position = c(0.95,0.05),
+    legend.justification = c("right", "bottom"),
+    legend.text = element_text(size=8),
+    legend.title = element_text(size=10),
+    legend.margin = margin(5,5,5,5),
+    legend.background = element_rect( fill = "white", color = "black"),
     axis.text = element_text(face = "bold"),
     axis.text.x = element_text(angle = 0, vjust = 0.5, hjust=0.5))+
-  guides(color = "none", fill="none")+
-  labs(y= expression(Daily~CO[2]*eq~flux~(g~CO[2]*eq~m^-2~d^-1)),
-       x=paste0("Case pilot"),
-       fill=paste0("Status"))
+  labs(y= expression(CO[2]*eq~flux~(g~CO[2]*eq~m^-2~d^-1)),
+       x=paste0("Case pilot"))
 
 
 #COMBINE all 3 panels (with CH4 inset)
@@ -504,10 +557,10 @@ baseline_3sp_ident_withinset <- plot_grid(
   align = "v",
   axis = "lr",
   labels = c("(a)", "(b)", "(c)"),label_x =0.165,label_y = 0.975,label_size = 13
-  # label_size = 12,
-  # label_x = 0.02,  # move label closer to left
-  # label_y = 1      # top-aligned
 )
+
+#preview: 
+# preview_png(baseline_3sp_ident_withinset, width = 90, height = 200)
 
 #Save:
 ggsave(plot = baseline_3sp_ident_withinset, 
@@ -519,10 +572,11 @@ ggsave(plot = baseline_3sp_ident_withinset,
        height = 200, 
        width = 90)
 
+
 ##In-text Avg preserved fluxes----
 
 data4paper %>% 
-  filter(status=="Preserved", ghgspecies%in%c("co2","ch4","GWPco2andch4")) %>% 
+  filter(status=="Preserved", ghgspecies%in%c("co2","ch4","gwp100","gwp20")) %>% 
   group_by(casepilot, ghgspecies) %>% 
   #Transform to consistent unit (co2 and ch4 in mmol, gwp in gCO2eq)
   mutate(dailyflux=if_else(ghgspecies=="co2",dailyflux*1000, dailyflux),
@@ -534,7 +588,8 @@ data4paper %>%
             q3= quantile(dailyflux, 0.75, na.rm=T),
             iqr = IQR(dailyflux, na.rm = T),
             unit_flux=unique(unitflux)) %>% 
-  arrange(ghgspecies, median_flux)
+  arrange(ghgspecies, median_flux) %>% 
+  print(n = 30)
 
 
 
@@ -610,7 +665,7 @@ plot_ghg_faceted <- function(GHG,
 
 #Produce plot using status template and subset data for CO2: 
 plot_ghg_faceted(GHG="co2",
-                 y_label = expression(Daily~CO[2]~flux~(mmol~m^-2~d^-1)),
+                 y_label = expression(CO[2]~flux~(mmol~m^-2~d^-1)),
                  y_multiplier = 1000)
 
 
@@ -628,7 +683,7 @@ ggsave(filename = "Figure_3_CO2perStatus.png",
 
 #Produce plot using status template and subset data for CH4: 
 plot_ghg_faceted(GHG="ch4",
-                 y_label = expression(Daily~CH[4]~flux~(mmol~m^-2~d^-1)),
+                 y_label = expression(CH[4]~flux~(mmol~m^-2~d^-1)),
                  y_multiplier = 1)
 
 #Save plot: 
@@ -643,10 +698,72 @@ ggsave(filename = "Figure_4_CH4perStatus.png",
 
 ##Fig. 5 (CO2eq status)-----
 
+
+#ORIGINAL PLOT, only GWP100 CH4 factor
 #Produce plot using status template and subset data for CO2eq: 
-plot_ghg_faceted(GHG="GWPco2andch4",
-                 y_label = expression(Daily~CO[2]*eq~flux~(g~CO[2]*eq~m^-2~d^-1)),
+plot_ghg_faceted(GHG="gwp100",
+                 y_label = expression(CO[2]*eq~flux~(g~CO[2]*eq~m^-2~d^-1)),
                  y_multiplier = 1)
+
+
+#Plot with two CH4 GWP factors (100y and 20y)
+  #Prep data for GWP plot
+  data<- data4paper %>% filter(ghgspecies%in%c("gwp100","gwp20")) %>% 
+    mutate(ghgspecies=if_else(ghgspecies=="gwp100", "GWP-100y","GWP-20y")) 
+  
+  emmeans_data<- bestmodel_emmeans_status %>% filter(ghgspecies%in%c("gwp100","gwp20")) %>% 
+    mutate(ghgspecies=if_else(ghgspecies=="gwp100", "GWP-100y","GWP-20y")) 
+  
+  panel_label<- bestmodel_emmeans_status %>% filter(ghgspecies%in%c("gwp100","gwp20")) %>% 
+    mutate(ghgspecies=if_else(ghgspecies=="gwp100", "GWP-100y","GWP-20y")) %>% 
+    distinct(ghgspecies,casepilot) %>% 
+    arrange(casepilot,ghgspecies) %>% 
+    mutate(label=c("(a)","(b)","(c)","(d)","(e)","(f)",
+                   "(g)","(h)","(i)","(j)","(k)","(l)"), x=-Inf, y=Inf)
+  
+  #Produce plot: no dailyflux multiplier (1), outliers = F
+  ggplot(data, aes(x = status, y = dailyflux * 1)) +
+    geom_hline(yintercept = 0, linetype = "dashed") +
+    geom_boxplot(width = 0.2, outliers = F, aes(fill = status), size = 0.7) +
+    #Add panel letters
+    geom_text(data = panel_label,  aes(x, y, label = label),
+              inherit.aes = FALSE,  hjust = -0.2, vjust = 1.3,
+              fontface = "bold",
+              size = 4
+    )+
+    # Add emmeans points
+    geom_point(data = emmeans_data, aes(x = status, y = emmean_bt * 1),
+               shape = 23, size = 3, fill = "black") +
+    
+    # Add group letters
+    geom_text(data = emmeans_data, aes(x = status, label = cld_group, y = Inf),
+              vjust = 1.2, hjust = 0.5, color = "black", inherit.aes = FALSE,
+              size = 5, fontface = "bold") +
+    theme_bw() +
+    scale_fill_manual(values = c(
+      "Preserved" = "#009E73",
+      "Altered"   = "#D55E00",
+      "Restored"  = "#56B4E9"
+    )) +
+    scale_color_manual(values = c(
+      "Preserved" = "#009E73",
+      "Altered"   = "#D55E00",
+      "Restored"  = "#56B4E9"
+    )) +
+    scale_y_continuous(expand = expansion(mult = c(0.1, 0.2), 0)) +
+    theme(
+      axis.text = element_text(face = "bold")
+    ) +
+    guides(color = "none", fill = "none") +
+    labs(
+      y = expression(CO[2]*eq~flux~(g~CO[2]*eq~m^-2~d^-1)),
+      x = "Conservation status",
+      fill = "Status"
+    ) +
+    facet_grid(rows = vars(casepilot), cols=vars(ghgspecies), scales = "free")
+
+
+
 
 #Save plot: 
 ggsave(filename = "Figure_5_CO2eqperStatus.png",
@@ -655,7 +772,7 @@ ggsave(filename = "Figure_5_CO2eqperStatus.png",
        dpi = 400,
        units = "mm",
        height = 229,
-       width = 90)
+       width = 180) #2-column
 
 
 
@@ -749,7 +866,7 @@ plot_status_per_season <- function(GHG, y_label,
 #Fig. S3: (CO2 status&season)------ 
 #Plot CO2: 
 plot_status_per_season(GHG = "co2",
-                       y_label = expression(Daily~CO[2]~flux~(mmol~m^-2~d^-1)),
+                       y_label = expression(CO[2]~flux~(mmol~m^-2~d^-1)),
                        y_multiplier = 1000, #to change from molar to milli-molar units
                        dodge_width = 0.6)
 
@@ -766,7 +883,7 @@ ggsave(filename = "Figure_S3_CO2perStatusandSeason.png",
 #Fig. S4: (CH4 status&season)------
 #Plot CH4: 
 plot_status_per_season(GHG = "ch4",
-                       y_label = expression(Daily~CH[4]~flux~(mmol~m^-2~d^-1)),
+                       y_label = expression(CH[4]~flux~(mmol~m^-2~d^-1)),
                        y_multiplier = 1,
                        dodge_width = 0.6)
 
@@ -779,15 +896,31 @@ ggsave(filename = "Figure_S4_CH4perStatusandSeason.png",
        height = 229,
        width = 180)
 
-#Fig. S5: (CO2eq status&season)------
-#Plot CO2eq: 
-plot_status_per_season(GHG = "GWPco2andch4",
-                       y_label = expression(Daily~CO[2]*eq~flux~(g*CO[2~eq]~m^-2~d^-1)),
+#Fig. S5a: (GWP100-CO2eq status&season)------
+#Plot CO2eq-gwp100: 
+plot_status_per_season(GHG = "gwp100",
+                       y_label = expression(GWP100~CO[2]*eq~flux~(g*CO[2~eq]~m^-2~d^-1)),
                        y_multiplier = 1,
                        dodge_width = 0.6)
 
 #Save plot: 
-ggsave(filename = "Figure_S5_CO2eqperStatusandSeason.png",
+ggsave(filename = "Figure_S5a_GWP100CO2eqperStatusandSeason.png",
+       path = path_supplementary,
+       device = "png",
+       dpi = 400,
+       units = "mm",
+       height = 229,
+       width = 180)
+
+#Fig. S5b: (GWP20-CO2eq status&season)------
+#Plot CO2eq-gwp20: 
+plot_status_per_season(GHG = "gwp20",
+                       y_label = expression(GWP20~CO[2]*eq~flux~(g*CO[2~eq]~m^-2~d^-1)),
+                       y_multiplier = 1,
+                       dodge_width = 0.6)
+
+#Save plot: 
+ggsave(filename = "Figure_S5b_GWP20CO2eqperStatusandSeason.png",
        path = path_supplementary,
        device = "png",
        dpi = 400,
@@ -862,7 +995,7 @@ plot_status_per_vegpresence <- function(GHG, y_label,
 #Fig. S6: (CO2 status&vegpresence)------ 
 #CO2: 
 plot_status_per_vegpresence(GHG = "co2",
-                            y_label = expression(Daily~CO[2]~flux~(mmol~m^-2~d^-1)),
+                            y_label = expression(CO[2]~flux~(mmol~m^-2~d^-1)),
                             y_multiplier = 1000, #to change from molar to milli-molar units
                             dodge_width = 0.6)
 
@@ -879,7 +1012,7 @@ ggsave(filename = "Figure_S6_CO2perStatusandVegpresence.png",
 #Fig. S7: (CH4 status&vegpresence)------ 
 #CH4: 
 plot_status_per_vegpresence(GHG = "ch4",
-                            y_label = expression(Daily~CH[4]~flux~(mmol~m^-2~d^-1)),
+                            y_label = expression(CH[4]~flux~(mmol~m^-2~d^-1)),
                             y_multiplier = 1,
                             dodge_width = 0.6)
 
@@ -893,15 +1026,32 @@ ggsave(filename = "Figure_S7_CH4perStatusandVegpresence.png",
        width = 180)
 
 
-#Fig. S8: (CO2eq status&vegpresence)------ 
+#Fig. S8a: (GWP100-CO2eq status&vegpresence)------ 
 #CO2eq: 
-plot_status_per_vegpresence(GHG = "GWPco2andch4",
-                            y_label = expression(Daily~CO[2]*eq~flux~(g*CO[2~eq]~m^-2~d^-1)),
+plot_status_per_vegpresence(GHG = "gwp100",
+                            y_label = expression(GWP100~CO[2]*eq~flux~(g*CO[2~eq]~m^-2~d^-1)),
                             y_multiplier = 1,
                             dodge_width = 0.6)
 
 #Save plot: 
-ggsave(filename = "Figure_S8_CO2eqperStatusandVegpresence.png",
+ggsave(filename = "Figure_S8a_GWP100CO2eqperStatusandVegpresence.png",
+       path = path_supplementary,
+       device = "png",
+       dpi = 400,
+       units = "mm",
+       height = 229,
+       width = 180)
+
+
+#Fig. S8b: (GWP20-CO2eq status&vegpresence)------ 
+#CO2eq: 
+plot_status_per_vegpresence(GHG = "gwp20",
+                            y_label = expression(GWP20~CO[2]*eq~flux~(g*CO[2~eq]~m^-2~d^-1)),
+                            y_multiplier = 1,
+                            dodge_width = 0.6)
+
+#Save plot: 
+ggsave(filename = "Figure_S8b_GWP20CO2eqperStatusandVegpresence.png",
        path = path_supplementary,
        device = "png",
        dpi = 400,
@@ -912,10 +1062,151 @@ ggsave(filename = "Figure_S8_CO2eqperStatusandVegpresence.png",
 
 
 
+#Fig. S9: (CH4 vs inundation)-----
+
+#Add water-depth (cm) and inundated (T/F) to ch4 dailyfluxes
+ch4_daily<- data4paper %>% 
+  filter(ghgspecies=="ch4") %>% 
+  left_join(plotcodes %>% dplyr::select(plotcode, water_depth), by="plotcode") %>% 
+  mutate(inundated=water_depth>0)
+
+#Import and calculate sampling-level values for relevant water variables: 
+
+#Water dataset: 
+#We need sampling-level averages for:
+#Chla: microg/L
+#TN and TP units: micromol/L
+#Conductivity: mS/cm
+
+
+#Use high-tide samplings for Aveiro, they are the relevant ones for estimate of sulphate-suply via salinity. We had to manually select and assign high-tide samplings to each site for RI due to grouping of high-tide samplings (collected in the channels in between subsites). 
+
+w<- readxl::read_xlsx(path = paste0(path_0_sourcedata, "Supp_Ancillary_Water_Data_RIhightide.xlsx"))
+
+wat<- w %>% 
+  dplyr::select(Season,Site,Subsite,Tide,`Label Sample ID`,`Water depth (m)`,`Tw (ºC)`, `Cond (µS/cm)`,Salinity,pH,`DO (%)`,`Ox (mg/l)`,`Total bacteria (cel ml-1) BW`,`DOC (µM)`,`Diss. Total-P (micromol P/L)`,`Diss. Ntotal (micromol N/L)`,`Part. Total-P (micromol P/L)`,`Part. Total -N (micromol N/L)`,`Chl-a with correction for phaeopigments, µg/l`,`Patm (millibar)`) %>% 
+  rename(season=Season, casepilot=Site, subsite=Subsite, sampleID=`Label Sample ID`,
+         depth=`Water depth (m)`, temp=`Tw (ºC)`,
+         conductivity=`Cond (µS/cm)`, salinity=Salinity, ph=pH, DO_percent=`DO (%)`, DO_mgl=`Ox (mg/l)`,
+         bact=`Total bacteria (cel ml-1) BW`, doc=`DOC (µM)`, 
+         tdp=`Diss. Total-P (micromol P/L)`,tdn=`Diss. Ntotal (micromol N/L)`,
+         tpp=`Part. Total-P (micromol P/L)`, tpn=`Part. Total -N (micromol N/L)`,
+         chla=`Chl-a with correction for phaeopigments, µg/l`,
+         patm_mbar=`Patm (millibar)`) %>% 
+  #Remove low-tide samples of Aveiro (the relevant measurement for sulphate suply is the high-tide, low tide never contacts the sites sensu-stricto): 
+  filter(!(Tide=="LT"&casepilot=="RI")) %>%
+  #subsitute all below detection limit with cero
+  mutate(tdp=as.numeric(gsub("<LD", "0", tdp))) %>% 
+  #add status: 
+  mutate(status=factor(case_when(grepl("A[0-9]",subsite)~"Altered",
+                                 grepl("P[0-9]",subsite)~"Preserved",
+                                 grepl("R[0-9]",subsite)~"Restored"), levels=c("Altered","Preserved","Restored"), ordered=T)) %>% 
+  #Calculate water TN and TP
+  mutate(tn=tdn+tpn,
+         tp=tdp+tpp)%>%
+  dplyr::select(casepilot, season, status, subsite, chla, conductivity, tn,tp) 
+
+
+#Calculate summary statistics for the relevant variables (seasonal): 
+wat_summary_season <- wat%>% 
+  mutate(conductivity=conductivity/1000) %>% #Conductivity in mS/cm
+  pivot_longer(cols = -c(casepilot,status,season,subsite), names_to = "variable",values_to = "value") %>% 
+  group_by(casepilot, variable, status,season,subsite) %>% 
+  summarise(avg=mean(value, na.rm=T),
+            SD=sd(value, na.rm=T), 
+            nobs=sum(!is.na(value)),
+            se=SD/sqrt(nobs)) %>% 
+  dplyr::select(casepilot, status, season,subsite, variable, avg, se, nobs)
+
+wide_wat_summary_season<- wat_summary_season %>% 
+  dplyr::select(-nobs) %>% 
+  pivot_wider(names_from = "variable",values_from = c("avg","se")) %>% 
+  mutate(subsite_only= subsite,
+         subsite= paste(casepilot, subsite_only,sep="-"))
 
 
 
+#Add sampling-average water parameters to CH4 fluxes:
+ch4_daily_bch_seasonal <- ch4_daily %>% 
+  mutate(status = as.character(status)) %>% 
+  left_join(
+    wide_wat_summary_season %>% 
+      mutate(status = as.character(status)) %>% 
+      select(-subsite_only),
+    by = c("casepilot", "status", "season", "subsite")
+  ) %>% 
+  mutate(
+    chamber_typewater = if_else(inundated, "Inundated", "Dry"),
+    status=factor(status, levels = c("Preserved","Altered","Restored"), ordered = T)
+  )
 
+
+#For each subsite visit (total_n=144), calculate mean, median, se, ch4 flux and proportion of chambers with water, add small value to dailyflux to avoid negative and zero-flux values from being excluded during log10 transformation.
+ch4_sampling_summary<- ch4_daily_bch_seasonal %>% 
+  group_by(casepilot, status, subsite, sampling, ghgspecies, unitflux) %>% 
+  mutate(dailyflux=dailyflux+0.001) %>% 
+  summarise(mean_ch4=mean(dailyflux, na.rm=T),
+            median_ch4=median(dailyflux, na.rm=T),
+            q25_ch4=quantile(dailyflux, 0.25, na.rm=T),
+            q75_ch4=quantile(dailyflux, 0.75, na.rm=T),
+            SD_ch4=sd(dailyflux, na.rm=T),
+            n_ch4=sum(!is.na(dailyflux)),
+            prop_inundation= sum(inundated)/sum(!is.na(inundated)),
+            mean_conductivity=mean(avg_conductivity),
+            mean_chla=mean(avg_chla),
+            SE_chla=mean(se_chla),
+            mean_TP=mean(avg_tp),
+            se_TP=mean(se_tp))
+
+
+
+#Create figure: 
+#General cross-system correlation median CH4 vs proportion of inundated chambers
+ch4_sampling_summary %>% 
+  ggplot(aes(x=prop_inundation, y=(median_ch4)))+
+  geom_point(aes(col=casepilot))+
+  stat_cor()+
+  scale_y_log10(label=label_log(digits = 2))+
+  labs(y=expression(Median ~ CH[4] ~ flux ~ (mmol~m^-2~d^-1)),
+       x="Proportion of inundated chambers",
+       col="Case pilot")+
+  geom_smooth(method="lm",se=F, col="black")+
+  theme_bw()
+
+
+#Save plot: 
+ggsave(filename = "Figure_S9_CorrelationCH4-Inundation.png",
+       path = path_supplementary,
+       device = "png",
+       dpi = 400,
+       units = "mm",
+       height = 80,
+       width = 110)
+
+
+#Fig. S10: (CH4 vs conductivity)-----
+
+#General cross-system correlation CH4 vs conductivity
+ch4_sampling_summary %>% 
+  ggplot(aes(x=(mean_conductivity), y=(median_ch4)))+
+  geom_point(aes(col=casepilot))+
+  stat_cor()+
+  scale_y_log10(label=label_log(digits = 2))+
+  scale_x_log10(breaks=c(0.1,1,10,100), limits=c(0.1,200 ))+
+  labs(y=expression(Median ~ CH[4] ~ flux ~ (mmol~m^-2~d^-1)),
+       x=expression(Mean ~ water ~ conductivity ~ (mS~cm^-1)),
+       col="Case pilot")+
+  geom_smooth(method="lm",se=F, col="black")+
+  theme_bw()
+
+#Save plot: 
+ggsave(filename = "Figure_S10_CorrelationCH4-Conductivity.png",
+       path = path_supplementary,
+       device = "png",
+       dpi = 400,
+       units = "mm",
+       height = 80,
+       width = 110)
 
 
 #____________________--------
@@ -947,7 +1238,7 @@ formated_summary_simplemodels<- simplemodel_summary %>%
   pivot_longer(cols=c(status_pval, season_pval, status.season_pval), names_to = c("effect","drop"),names_sep = "_", values_to = "p_value") %>% 
   separate(dataset, into = c("casepilot", "ghgspecies")) %>% 
   mutate(casepilot=factor(casepilot, levels = c("DU","RI","CA","VA","DA","CU"), ordered = T),
-         ghgspecies=factor(ghgspecies, levels = c("co2","ch4","GWPco2andch4"), ordered = T),
+         ghgspecies=factor(ghgspecies, levels = c("co2","ch4","gwp100","gwp20"), ordered = T),
          effect=factor(effect, levels = c("status","season","status.season"), ordered = T)) %>% 
   rename(R2c=homoced_R2c, R2m=homoced_R2m) %>% 
   dplyr::select(ghgspecies, casepilot, transformation,formula,family, nobs, R2m, R2c, effect, p_value) %>% 
@@ -967,7 +1258,7 @@ formated_summary_complexmodels<- complexmodel_summary %>%
   pivot_longer(cols=c(status_pval, season_pval,vegpresence_pval, status.season_pval, status.vegpresence_pval, status.season.vegpresence_pval), names_to = c("effect","drop"),names_sep = "_", values_to = "p_value") %>% 
   separate(dataset, into = c("casepilot", "ghgspecies")) %>% 
   mutate(casepilot=factor(casepilot, levels = c("DU","RI","CA","VA","DA","CU"), ordered = T),
-         ghgspecies=factor(ghgspecies, levels = c("co2","ch4","GWPco2andch4"), ordered = T),
+         ghgspecies=factor(ghgspecies, levels = c("co2","ch4","gwp100","gwp20"), ordered = T),
          effect=factor(effect, levels = c("status","season","vegpresence","status.season","status.vegpresence","season.vegpresence", "status.season.vegpresence"), ordered = T)) %>% 
   rename(R2c=homoced_R2c, R2m=homoced_R2m) %>% 
   dplyr::select(ghgspecies, casepilot, transformation,formula,family, nobs, R2m, R2c, effect, p_value) %>% 
@@ -998,7 +1289,8 @@ wordtable_model_summary<- combined_model_summary %>%
          formula=gsub("dailyflux_trans","Flux",formula),
          ghgspecies=case_when(ghgspecies=="co2"~"CO2", 
                               ghgspecies=="ch4"~"CH4",
-                              ghgspecies=="GWPco2andch4"~ "CO2eq"),
+                              ghgspecies=="gwp100"~ "GWP100-CO2eq",
+                              ghgspecies=="gwp20"~ "GWP20-CO2eq"),
          formula= paste0("Call: ",formula, 
                          ", \nDistribution: ",family,
                          ", \nTransformation: ",transformation), 
@@ -1034,28 +1326,82 @@ print(doc,
 
 
 #Table S2: Emmeans status-----
-#Table with full emmeans for each status, casepilot and ghg
 
-formated_emmeans<- bestmodel_emmeans_status %>%
-  #change units co2  to mmol 
-  mutate(emmean=if_else(ghgspecies=="co2", emmean_bt*1000,emmean_bt),
-         SE=if_else(ghgspecies=="co2", SE_bt*1000,SE_bt),
-         lower.CL=if_else(ghgspecies=="co2", lower.CL_bt*1000,lower.CL_bt),
-         upper.CL=if_else(ghgspecies=="co2", upper.CL_bt*1000,upper.CL_bt)) %>% 
-  mutate(emmean_SE=sprintf("%.3g ± %.3g", emmean, SE),# 3 significant figures (normal or scientific notation)
-         CI95= sprintf("%.3g to %.3g", lower.CL, upper.CL)) %>% # 3 significant figures (normal or scientific notation)
-  dplyr::select(c(ghgspecies, casepilot, status, emmean_SE, CI95)) %>% 
-  mutate(ghgspecies=if_else(ghgspecies=="GWPco2andch4", "gwp",ghgspecies)) %>% 
+
+#emmmeans units: 
+data4paper %>% dplyr::select(ghgspecies, unitflux) %>% distinct()
+
+
+#helper for number formating (defines number of significant digits for SE, and rounds emmeans and CI to the same number of decimal places, same precision for all). NO scientific notation
+fmt_standard <- function(mean, se, lower, upper, sig_se = 2) {
+  res <- mapply(function(m, s, l, u) {
+    if (any(is.na(c(m, s, l, u)))) return(c(NA, NA))
+    
+    # 1) round SE to k significant digits
+    s_r <- signif(s, sig_se)
+    
+    # 2) compute decimal places needed
+    digits <- if (s_r == 0) {
+      0
+    } else {
+      sig_se - 1 - floor(log10(abs(s_r)))
+    }
+    digits <- max(0, digits)
+    
+    # 3) round others to same precision
+    m_r <- round(m, digits)
+    l_r <- round(l, digits)
+    u_r <- round(u, digits)
+    
+    # 4) format (preserves trailing zeros)
+    m_str <- formatC(m_r, format = "f", digits = digits)
+    s_str <- formatC(s_r, format = "f", digits = digits)
+    l_str <- formatC(l_r, format = "f", digits = digits)
+    u_str <- formatC(u_r, format = "f", digits = digits)
+    
+    c(
+      paste0(m_str, " ± ", s_str),
+      paste0(l_str, " to ", u_str)
+    )
+  }, mean, se, lower, upper, SIMPLIFY = FALSE)
+  
+  do.call(rbind, res) |>
+    as.data.frame(stringsAsFactors = FALSE) |>
+    setNames(c("emmean_SE", "CI95"))
+}
+
+
+
+
+#Table with full emmeans for each status, casepilot and ghg (annual scale and propperly formated)
+formated_emmeans <- bestmodel_emmeans_status %>%
+  #change units to annual for all: just multiply by 365, keep mol, mmol gco2, and m2 for area
+  mutate(
+    emmean = emmean_bt * 365,
+    SE = SE_bt * 365,
+    lower.CL = lower.CL_bt * 365,
+    upper.CL = upper.CL_bt * 365
+  ) %>%
+  #apply consistent number formating, with 3 significant SE digits
+  bind_cols(with(.,fmt_standard(mean = emmean, se=SE,lower= lower.CL,upper= upper.CL, sig_se = 3))) %>%
+  #keep only required columns and pivot
+  dplyr::select(ghgspecies, casepilot, status, emmean_SE, CI95) %>% 
   pivot_wider(names_from = ghgspecies, values_from = c("emmean_SE", "CI95")) %>% 
-  dplyr::select(casepilot, status, emmean_SE_co2, CI95_co2, emmean_SE_ch4, CI95_ch4,emmean_SE_gwp, CI95_gwp)
+  dplyr::select(casepilot, status,
+                emmean_SE_co2, CI95_co2,
+                emmean_SE_ch4, CI95_ch4,
+                emmean_SE_gwp100, CI95_gwp100,
+                emmean_SE_gwp20, CI95_gwp20)
 
 
 
+
+#create flextable
 ft_emmeans<- formated_emmeans %>% 
   flextable() %>% 
   add_header_row(
-    values = c("Case pilot","Status","CO2 flux (mmol m-2 d-1)","CH4 flux (mmol m-2 d-1)","GWP flux (g CO2eq. m-2 d-1)"),  
-    colwidths = c(1,1,2,2,2)                          # number of columns each value spans
+    values = c("Case pilot","Status","CO2 flux (mol m-2 y-1)","CH4 flux (mmol m-2 y-1)","GWP100 flux (g CO2eq. m-2 y-1)","GWP20 flux (g CO2eq. m-2 y-1)"),  
+    colwidths = c(1,1,2,2,2,2)                          # number of columns each value spans
   ) %>%
   set_header_labels(
     casepilot = "Case pilot",
@@ -1064,8 +1410,10 @@ ft_emmeans<- formated_emmeans %>%
     CI95_co2 = "95% CI",
     emmean_SE_ch4 = "Mean ± SE",
     CI95_ch4 = "95% CI",
-    emmean_SE_gwp = "Mean ± SE",
-    CI95_gwp = "95% CI") %>%
+    emmean_SE_gwp100 = "Mean ± SE",
+    CI95_gwp100 = "95% CI",
+    emmean_SE_gwp20 = "Mean ± SE",
+    CI95_gwp20 = "95% CI") %>%
   merge_v(j="casepilot") %>% 
   merge_v(j="casepilot", part="header") %>% 
   merge_v(j="status", part="header") %>% 
@@ -1089,9 +1437,16 @@ print(doc,
 
 
 #Table S3: Contrasts status-----
+
+#DONE: Change units to annual (keep molar but check appropriate multiplier with new scale)
+#DONE: Add CO2eq20
+
+#ADapt same formating number of emmeans (check for naming of column), 
+
+
 #Supplementary tables with full contrasts for status: 
 #case pilot    Contrast    Difference +- SE    95%CI   p.value
-simplemodel_contrasts<- read.csv(file = paste0(path_2_modeloutputs,"Posthoctests_RI_chambermodels.csv"))
+simplemodel_contrasts<- read.csv(file = paste0(path_2_modeloutputs,"Posthoctests_RI_chambermodels_boot.csv"))
 
 formatedcontrasts_RI<- simplemodel_contrasts %>% 
   #Select RI status comparisons: 
@@ -1103,7 +1458,8 @@ formatedcontrasts_RI<- simplemodel_contrasts %>%
   mutate(difference=-estimate_bt, SE=SE_bt, lower.CL=-upper.CL_bt, upper.CL=-lower.CL_bt) %>% 
   mutate(Fghg=case_when(ghgspecies=="co2"~"CO2",
                         ghgspecies=="ch4"~"CH4",
-                        ghgspecies=="GWPco2andch4"~"CO2eq"),
+                        ghgspecies=="gwp100"~"GWP100-CO2eq",
+                        ghgspecies=="gwp20"~"GWP20-CO2eq"),
          contrast_reordered=case_when(contrast == "Altered - Restored"~"Restored - Altered",
                                       contrast == "Altered - Preserved"~"Preserved - Altered",
                                       contrast == "Preserved - Restored"~"Restored - Preserved")) %>% 
@@ -1111,7 +1467,7 @@ formatedcontrasts_RI<- simplemodel_contrasts %>%
   dplyr::select(casepilot, ghgspecies,dataset, contrast_reordered, difference, SE, lower.CL, upper.CL,p.value)
 
 
-complexmodel_contrasts<- read.csv(file=paste0(path_2_modeloutputs,"Posthoctests_rest_chambermodels.csv"))
+complexmodel_contrasts<- read.csv(file=paste0(path_2_modeloutputs,"Posthoctests_rest_chambermodels_boot.csv"))
 
 formatedcontrasts_rest<- complexmodel_contrasts %>% 
   #Select status comparison for all casepilots (except RI, not in this dataset)
@@ -1123,7 +1479,8 @@ formatedcontrasts_rest<- complexmodel_contrasts %>%
   mutate(difference=-estimate_bt, SE=SE_bt, lower.CL=-upper.CL_bt, upper.CL=-lower.CL_bt) %>% 
   mutate(Fghg=case_when(ghgspecies=="co2"~"CO2",
                         ghgspecies=="ch4"~"CH4",
-                        ghgspecies=="GWPco2andch4"~"CO2eq"),
+                        ghgspecies=="gwp100"~"GWP100-CO2eq",
+                        ghgspecies=="gwp20"~"GWP20-CO2eq"),
          contrast_reordered=case_when(contrast == "Altered - Restored"~"Restored - Altered",
                                       contrast == "Altered - Preserved"~"Preserved - Altered",
                                       contrast == "Preserved - Restored"~"Restored - Preserved")) %>% 
@@ -1134,27 +1491,29 @@ formatedcontrasts_rest<- complexmodel_contrasts %>%
 
 formatedcontrasts_all<-  rbind(formatedcontrasts_rest,formatedcontrasts_RI) %>% 
   mutate(casepilot=factor(casepilot, levels = c("DU","RI","CA","VA","DA","CU"), ordered = T),
-         ghgspecies=factor(ghgspecies, levels=c("co2","ch4","GWPco2andch4"), ordered = T)) %>% 
-  #Change units of CO2 contrast from mol units to mmol m-2 d-1, ch4 is already
-  #in mmol m-2d-1, GWP is in gCO2eq m-2d-1
-  mutate(difference= if_else(ghgspecies=="co2", difference*1000, difference), 
-         SE=if_else(ghgspecies=="co2", SE*1000, SE),
-         lower.CL=if_else(ghgspecies=="co2", lower.CL*1000,lower.CL),
-         upper.CL=if_else(ghgspecies=="co2", upper.CL*1000, upper.CL), 
-         flux_units=case_when(ghgspecies=="co2"~"mmol m-2 d-1",
-                              ghgspecies=="ch4"~"mmol m-2 d-1",
-                              ghgspecies=="GWPco2andch4"~"g CO2 eq.m-2 d-1"
-         )) %>% 
+         ghgspecies=factor(ghgspecies, levels=c("co2","ch4","gwp100","gwp20"), ordered = T)) %>% 
+  #Change of all ghgspecies to annual (multiply by 365, update units). 
+  mutate(difference= difference*365, 
+         SE=SE*365,
+         lower.CL=lower.CL*365,
+         upper.CL=upper.CL*365, 
+         flux_units=case_when(ghgspecies=="co2"~"mol m-2 y-1",
+                              ghgspecies=="ch4"~"mmol m-2 y-1",
+                              ghgspecies=="gwp100"~"g CO2 eq.m-2 y-1",
+                              ghgspecies=="gwp20"~"g CO2 eq.m-2 y-1")) %>% 
   arrange(casepilot,ghgspecies) %>%  
-  mutate(difference_SE=sprintf("%.3g ± %.3g", difference, SE),# 3 significant figures (normal or scientific notation)
-         CI95= sprintf("%.3g to %.3g", lower.CL, upper.CL),# 3 significant figures (normal or scientific notation)
-         pvalue=if_else(p.value<0.001,"< 0.001",as.character(round(p.value,digits = 3)))) %>% 
+  #format estimates with decimal precission based on SE with 3 significant digits (re-use function for emmeans, rename after)
+  #apply consistent number formating, with 3 significant SE digits
+  bind_cols(with(.,fmt_standard(mean = difference, se=SE,lower= lower.CL,upper= upper.CL, sig_se = 3))) %>% 
+  rename(difference_SE=emmean_SE) %>% 
+  #format pvalue
+  mutate(pvalue=if_else(p.value<0.001,"< 0.001",as.character(round(p.value,digits = 3)))) %>% 
   dplyr::select(casepilot, ghgspecies, dataset, contrast_reordered, difference_SE,CI95, pvalue) %>% 
   rename(contrast=contrast_reordered)
 
 
 #We need a different column with units
-#3 tables (1perGHG), with columns dataset, contrast, Difference (units), Pvalue
+#4 tables (1perGHG), with columns dataset, contrast, Difference (units), Pvalue
 
 #within the Difference column we will have 3 actual columns (estimate +- SE, 95% CI, Pvalue)
 
@@ -1163,7 +1522,7 @@ ft_contrasts_co2<- formatedcontrasts_all %>%
   dplyr::select(casepilot, contrast, difference_SE, CI95, pvalue) %>% 
   flextable() %>% 
   add_header_row(
-    values = c("Case pilot","Contrast","Difference (mmol CO2 m-2 d-1)"),  
+    values = c("Case pilot","Contrast","Difference (mol CO2 m-2 y-1)"),  
     colwidths = c(1,1,3)                          # number of columns each value spans
   ) %>%
   set_header_labels(
@@ -1189,7 +1548,7 @@ ft_contrasts_ch4<- formatedcontrasts_all %>%
   dplyr::select(casepilot, contrast, difference_SE, CI95, pvalue) %>% 
   flextable() %>% 
   add_header_row(
-    values = c("Case pilot","Contrast","Difference (mmol CH4 m-2 d-1)"),  
+    values = c("Case pilot","Contrast","Difference (mmol CH4 m-2 y-1)"),  
     colwidths = c(1,1,3)                          # number of columns each value spans
   ) %>%
   set_header_labels(
@@ -1209,12 +1568,37 @@ ft_contrasts_ch4<- formatedcontrasts_all %>%
   autofit()
 
 
-ft_contrasts_gwp<- formatedcontrasts_all %>%
-  filter(ghgspecies=="GWPco2andch4") %>%
+ft_contrasts_gwp100<- formatedcontrasts_all %>%
+  filter(ghgspecies=="gwp100") %>%
   dplyr::select(casepilot, contrast, difference_SE, CI95, pvalue) %>% 
   flextable() %>% 
   add_header_row(
-    values = c("Case pilot","Contrast","Difference (g CO2eq. m-2 d-1)"),  
+    values = c("Case pilot","Contrast","Difference (g CO2eq. m-2 y-1)"),  
+    colwidths = c(1,1,3)                          # number of columns each value spans
+  ) %>%
+  set_header_labels(
+    casepilot = "Case pilot",
+    contrast = "Contrast",
+    difference_SE = "Estimate ± SE",
+    CI95 = "95% CI",
+    pvalue = "P-value"
+  ) %>% 
+  merge_v(j="casepilot") %>% 
+  merge_v(j="casepilot", part="header") %>% 
+  merge_v(j="contrast", part="header") %>% 
+  bold(part = "header") %>%
+  fontsize(size=10, part = "header") %>% 
+  fontsize(size=10, part = "body") %>%
+  theme_vanilla() %>%
+  autofit()
+
+
+ft_contrasts_gwp20<- formatedcontrasts_all %>%
+  filter(ghgspecies=="gwp20") %>%
+  dplyr::select(casepilot, contrast, difference_SE, CI95, pvalue) %>% 
+  flextable() %>% 
+  add_header_row(
+    values = c("Case pilot","Contrast","Difference (g CO2eq. m-2 y-1)"),  
     colwidths = c(1,1,3)                          # number of columns each value spans
   ) %>%
   set_header_labels(
@@ -1235,13 +1619,15 @@ ft_contrasts_gwp<- formatedcontrasts_all %>%
 
 
 doc <- read_docx() %>%
-  body_add_par("Table S3. Post-hoc contrasts between Conservation status classes for CO2, CH4 and CO2eq.", style = "heading 1") %>%
+  body_add_par("Table S3. Post-hoc contrasts between Conservation status classes for CO2, CH4, GWP100-CO2eq and GWP20-CO2eq.", style = "heading 1") %>%
   body_add_par("Table S3a. CO2 Post-hoc contrasts.", style = "Normal") %>%
   body_add_flextable(ft_contrasts_co2) %>% 
   body_add_par("Table S3b. CH4 Post-hoc contrasts.", style = "Normal") %>%
   body_add_flextable(ft_contrasts_ch4) %>% 
-  body_add_par("Table S3c. CO2eq Post-hoc contrasts.", style = "Normal") %>%
-  body_add_flextable(ft_contrasts_gwp) 
+  body_add_par("Table S3c. GWP100-CO2eq Post-hoc contrasts.", style = "Normal") %>%
+  body_add_flextable(ft_contrasts_gwp100) %>% 
+  body_add_par("Table S3d. GWP20-CO2eq Post-hoc contrasts.", style = "Normal") %>%
+  body_add_flextable(ft_contrasts_gwp20) 
 
 
 print(doc,
@@ -1347,4 +1733,4 @@ print(doc,
 
 
 #____________________--------
-}
+

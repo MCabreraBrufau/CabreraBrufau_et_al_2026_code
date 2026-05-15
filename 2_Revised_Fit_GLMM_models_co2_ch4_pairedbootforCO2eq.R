@@ -4,6 +4,58 @@
 
 
 #Description----
+#ALTERNATIVE APPROACH: 
+#using separate and independent models for co2,ch4,gwp100 and gwp20, is not ideal: models on built on co2eq directly lose gas-specfic behaviours, and, due to dataset-specific transformations and different modeling quality, results derived from GWP100 and GWP20 models do not agree well with each other. 
+#Instead of modeling co2eq, we will try to produce reliable paired estimates of co2 and ch4 from independent models (via paired bootstraping with resampling). Once we have the paired emmean distributions calculated, we can derive gwp100 emmeans distributions and gwp20 emmeans distributions, which can be tested and reflect the exact same behaviour modeledd by co2 and ch4 models, but with different relative importance for the different timescales.
+
+#Model summaries: 1 for co2 1 for ch4, from full paired dataset 
+#Emmeans CO2 and CH4: obtained via bootstraping, back-transformed
+#Contrasts CO2 and CH4: obtained via back-transformed emmeans 
+#p-values calculated in model scale (contrasts from direct model emmmeans)
+
+#CO2eq(GWP100, GWP20)
+#NO model for them (their results emerge from the separate CO2 and CH4 models)
+#Emmeans: calculated from paired bootstraped emmeans distributions of ch4 and co2 (in real scale)
+#Contrasts: calculated from real scale emmeans distributions
+#P-values: calculated in real scale (cannot be in model scale) from contrasts
+
+#steps: 
+#1. filter dataset for paired co2 and ch4 observations (required)
+#2. transform for normality (as usual)
+#3. build models and derive effects and fit
+
+#4. Bootstrap: 
+#4.1. Create resampled datasets (some obs missing, others duplicated) that:
+    #A. mantain subsite grouping (subiste A1 data cannot be mixed with subsite A2 when resampling)
+    #B. result in valid datasets (where all factors from model are represented. Matrix build with levels of season*status*vegpresence must be filled), otherwise reject simulated dataset and try again. 
+
+#4.2. For each simulated dataset, refit models (co2, ch4), calculate EMMEANs (weighted appropriately) for all comparisons of interest. 
+
+#5. Calculate for co2 and for ch4: 
+  #5.1. Summary of back-transformed emmeans for reporting in paper, (mean, SE, CI95)
+  #5.2. Conrasts of model-scale emmeans, derive significance of comparisons for paper (empirical p-value )
+  #5.3. Contrasts of back-transformed emmeans. Summarised for reporting in paper (mean, SE, CI95 ) 
+
+#6. CO2eq (gwp100 and gwp20): 
+  #6.1. Calculate emmean distributions of CO2eq from paired distributions of back-transformed co2 and ch4 emmeans. Using gwp100 and gwp20 for ch4. 
+  #6.2. Create summary of emmeans CO2eq for paper (mean, SE, CI95)
+  #6.3. Calculate contrasts and p-values, summary for paper (mean, SE, CI95, empirical p-value)
+
+
+#Caveats/Limitations: 
+  #we would be discarding some observations (non-paired obs of co2 or ch4)
+  #Slightly more complex to explain
+  #May be less powerfull for CO2eq comparisons
+
+#BUT: 
+  #statisitically sound approach, 
+  #we mantain covariation/dependence of co2 and ch4 via paired bootstrap, 
+  #we do not obscure gas-specific behaviours, we model each gas independently without forcing a common distribution, common significant effects or common directional response (all things that a single gwp model built on individually-summed co2eq fluxes would be doing). 
+  #Restults for GWP100 and GWP20 will be consistent, just scaled by different GWP factors, but rely on the same estimates as CO2 and CH4 models. 
+
+
+
+
 #This scrip is used to model the effect of restoration in each casepilot. Using
 #net daily GHG exchange rates of appropriate incubations, data preparation is in
 #1_Prepare_Data.R script.
@@ -26,10 +78,10 @@
 
 
 #STEPS: 
-#1. Import and format data: remove Nas, as.factor levels, 
-#2. Transform data: Using BestNormalize package, find and apply for each casepilot-GHGspecies, the transformation that maximizes normality. 
-#3. Optimize and select modelling structure (family-distribution) for each casepilot*GHGspecies combo (co2, ch4, GWPco2andch4).
-#4. Calculate model outputs: 
+#0. Import and format data: remove Nas, as.factor levels, 
+#1. Transform data: Using BestNormalize package, find and apply for each casepilot-GHGspecies, the transformation that maximizes normality. 
+#2. Optimize and select modelling structure (family-distribution) for each casepilot*GHGspecies combo (co2, ch4, gwp100 and gwp20).
+#3. Calculate model outputs: 
   
   #Model summaries
   #Model residual-tests
@@ -61,6 +113,8 @@ required_pkgs <- c("tidyverse",
                    "performance",
                    "rstatix",
                    "emmeans",
+                   "progressr",
+                   "future.apply",
                    "multcomp",
                    "multcompView"
                    )
@@ -97,8 +151,9 @@ if (!dir.exists(extraplots_path)) {
   dir.create(extraplots_path, recursive = TRUE)
 }
 
+#Run up to model-fittng (included)
 
-{
+
 #0.Contrast options-----
 #NOTES on contrasts: in R by default, contrast is "contr.treatment" which uses
 #the first level of each factor as the "reference" level and all subsequent as
@@ -121,9 +176,7 @@ data4models<- read.csv(paste0(path_1_paperdata,"ChamberData4paper.csv"))
 
 #Format and filter:
 data4models<- data4models %>% 
-  filter(ghgspecies%in%c("co2","ch4","gwp_co2andch4")) %>% 
-  #Rename to GWPco2andch4
-  mutate(ghgspecies=if_else(ghgspecies=="gwp_co2andch4","GWPco2andch4",ghgspecies)) %>% 
+  filter(ghgspecies%in%c("co2","ch4")) %>% 
   #Remove NAs
   filter(!is.na(dailyflux)) %>% 
   mutate(season=factor(season, ordered = F),
@@ -156,8 +209,7 @@ data4models<- data4models %>%
 
 #0. Custom Functions -------
 #Here functions to access relevant results from models contained inside a named
-#list. Used for ease of formatting and to avoid repetition. Will be used to
-#summarise information.
+#list. Used for ease of formatting and to avoid repetition. Will be used to summarise information.
 
 #Formula to get marginal and conditional R2s from model list:
 get_R2s <- function(model_list) {
@@ -323,7 +375,7 @@ summarize_dharma_diagnostics <- function(model_list) {
 }
 
 
-#Function to Produce comparative histograms and qqplots of untransformed and best-Normalize transformed data. 
+#Function to Produce comparative histograms and QQplots of untransformed and best-Normalize transformed data. 
 plot_bestNormalize <- function(bn_obj, n_bins = 30, title = NULL) {
   library(ggplot2)
   library(gridExtra)
@@ -493,12 +545,12 @@ best_pseudo_log <- function(x, base = 10, sigma_range = NULL, standardize = TRUE
     x_clean <- x[!is.na(x) & is.finite(x)]
     if (length(x_clean) < 3) stop("Not enough valid data points.")
     
-    # Compute data-driven sigma_range if not provided (using 10th-90th percentile range)
+    # Compute data-driven sigma_range if not provided (using 5th-95th percentile range)
     if (is.null(sigma_range)) {
-      q <- quantile(abs(x_clean), probs = c(0.1, 0.9), na.rm = TRUE)
+      q <- quantile(abs(x_clean), probs = c(0.05, 0.95), na.rm = TRUE)
       lower <- max(q[1] / 10, .Machine$double.eps)  # Avoid zero or near-zero
       upper <- max(q[2], lower * 10)
-      sigma_range <- 10^seq(log10(lower), log10(upper), length.out = 100)#100 potential sigmas
+      sigma_range <- 10^seq(log10(lower), log10(upper), length.out = 500)#500 potential sigmas
     }
     
     # Evaluate normality across candidate sigma values
@@ -694,6 +746,9 @@ table_trans %>%
 m1_gaus_nostrata<- glmmTMB(formula = dailyflux_trans~status*season + (1|subsite), 
                         data = ca_co2,
                         family = gaussian(),
+                        control = glmmTMBControl(
+                          optCtrl = list(iter.max = 5000, eval.max = 5000)
+                        ),
                         dispformula = ~1)
 #Evaluate basic model:
 check_convergence(m1_gaus_nostrata)
@@ -712,6 +767,9 @@ check_residuals(m1_gaus_nostrata)
 m2_gaus_vegpresence<- glmmTMB(formula = dailyflux_trans~status*season*vegpresence + (1|subsite), 
                    data = ca_co2,
                    family = gaussian(),
+                   control = glmmTMBControl(
+                     optCtrl = list(iter.max = 5000, eval.max = 5000)
+                   ),
                    dispformula = ~1)
 #Evaluate model:
 check_convergence(m2_gaus_vegpresence)
@@ -727,10 +785,15 @@ check_residuals(m2_gaus_vegpresence)
 
 
 #T_family:
+if(F){
+  #skip, gaussian nonveg already good
 #Most basic: t_family, only status and season 
 m3_t_nostrata<- glmmTMB(formula = dailyflux_trans~status*season + (1|subsite), 
                         data = ca_co2,
                         family = t_family(),
+                        control = glmmTMBControl(
+                          optCtrl = list(iter.max = 5000, eval.max = 5000)
+                        ),
                         dispformula = ~1)
 #Evaluate basic model:
 check_convergence(m3_t_nostrata)
@@ -742,13 +805,16 @@ res<- simulateResiduals(m3_t_nostrata)
 plotQQunif(res)
 plotResiduals(res)
 check_residuals(m3_t_nostrata)
-#DECISION: does not converge. 
-
+#DECISION: 
+}
 
 #Vegetation presence: t_family, status, season and veg presence as fixed, subsite as random
 m4_t_vegpresence<- glmmTMB(formula = dailyflux_trans~status*season*vegpresence + (1|subsite), 
                       data = ca_co2,
                       family = t_family(),
+                      control = glmmTMBControl(
+                        optCtrl = list(iter.max = 5000, eval.max = 5000)
+                      ),
                       dispformula = ~1)
 #Evaluate basic model:
 check_convergence(m4_t_vegpresence)
@@ -804,6 +870,9 @@ table_trans %>%
 m1_gaus_nostrata<- glmmTMB(formula = dailyflux_trans~status*season + (1|subsite), 
                            data = cu_co2,
                            family = gaussian(),
+                           control = glmmTMBControl(
+                             optCtrl = list(iter.max = 5000, eval.max = 5000)
+                           ),
                            dispformula = ~1)
 #Evaluate basic model:
 check_convergence(m1_gaus_nostrata)
@@ -822,6 +891,9 @@ check_residuals(m1_gaus_nostrata)
 m2_gaus_vegpresence<- glmmTMB(formula = dailyflux_trans~status*season*vegpresence + (1|subsite), 
                               data = cu_co2,
                               family = gaussian(),
+                              control = glmmTMBControl(
+                                optCtrl = list(iter.max = 5000, eval.max = 5000)
+                              ),
                               dispformula = ~1)
 #Evaluate model:
 check_convergence(m2_gaus_vegpresence)
@@ -841,6 +913,9 @@ check_residuals(m2_gaus_vegpresence)
 m3_t_nostrata<- glmmTMB(formula = dailyflux_trans~status*season + (1|subsite), 
                         data = cu_co2,
                         family = t_family(),
+                        control = glmmTMBControl(
+                          optCtrl = list(iter.max = 5000, eval.max = 5000)
+                        ),
                         dispformula = ~1)
 #Evaluate basic model:
 check_convergence(m3_t_nostrata)
@@ -859,6 +934,9 @@ check_residuals(m3_t_nostrata)
 m4_t_vegpresence<- glmmTMB(formula = dailyflux_trans~status*season*vegpresence + (1|subsite), 
                            data = cu_co2,
                            family = t_family(),
+                           control = glmmTMBControl(
+                             optCtrl = list(iter.max = 5000, eval.max = 5000)
+                           ),
                            dispformula = ~1)
 #Evaluate basic model:
 check_convergence(m4_t_vegpresence)
@@ -912,6 +990,9 @@ table_trans %>%
 m1_gaus_nostrata<- glmmTMB(formula = dailyflux_trans~status*season + (1|subsite), 
                            data = da_co2,
                            family = gaussian(),
+                           control = glmmTMBControl(
+                             optCtrl = list(iter.max = 5000, eval.max = 5000)
+                           ),
                            dispformula = ~1)
 #Evaluate basic model:
 check_convergence(m1_gaus_nostrata)
@@ -930,6 +1011,9 @@ check_residuals(m1_gaus_nostrata)
 m2_gaus_vegpresence<- glmmTMB(formula = dailyflux_trans~status*season*vegpresence + (1|subsite), 
                               data = da_co2,
                               family = gaussian(),
+                              control = glmmTMBControl(
+                                optCtrl = list(iter.max = 5000, eval.max = 5000)
+                              ),
                               dispformula = ~1)
 #Evaluate model:
 check_convergence(m2_gaus_vegpresence)
@@ -950,6 +1034,9 @@ check_residuals(m2_gaus_vegpresence)
 m3_t_nostrata<- glmmTMB(formula = dailyflux_trans~status*season + (1|subsite), 
                         data = da_co2,
                         family = t_family(),
+                        control = glmmTMBControl(
+                          optCtrl = list(iter.max = 5000, eval.max = 5000)
+                        ),
                         dispformula = ~1)
 #Evaluate basic model:
 check_convergence(m3_t_nostrata)
@@ -968,6 +1055,9 @@ check_residuals(m3_t_nostrata)
 m4_t_vegpresence<- glmmTMB(formula = dailyflux_trans~status*season*vegpresence + (1|subsite), 
                            data = da_co2,
                            family = t_family(),
+                           control = glmmTMBControl(
+                             optCtrl = list(iter.max = 5000, eval.max = 5000)
+                           ),
                            dispformula = ~1)
 #Evaluate basic model:
 check_convergence(m4_t_vegpresence)
@@ -1020,6 +1110,9 @@ table_trans %>%
 m1_gaus_nostrata<- glmmTMB(formula = dailyflux_trans~status*season + (1|subsite), 
                            data = du_co2,
                            family = gaussian(),
+                           control = glmmTMBControl(
+                             optCtrl = list(iter.max = 5000, eval.max = 5000)
+                           ),
                            dispformula = ~1)
 #Evaluate basic model:
 check_convergence(m1_gaus_nostrata)
@@ -1038,6 +1131,9 @@ check_residuals(m1_gaus_nostrata)
 m2_gaus_vegpresence<- glmmTMB(formula = dailyflux_trans~status*season*vegpresence + (1|subsite), 
                               data = du_co2,
                               family = gaussian(),
+                              control = glmmTMBControl(
+                                optCtrl = list(iter.max = 5000, eval.max = 5000)
+                              ),
                               dispformula = ~1)
 #Evaluate model:
 check_convergence(m2_gaus_vegpresence)
@@ -1057,6 +1153,9 @@ check_residuals(m2_gaus_vegpresence)
 m3_t_nostrata<- glmmTMB(formula = dailyflux_trans~status*season + (1|subsite), 
                         data = du_co2,
                         family = t_family(),
+                        control = glmmTMBControl(
+                          optCtrl = list(iter.max = 5000, eval.max = 5000)
+                        ),
                         dispformula = ~1)
 #Evaluate basic model:
 check_convergence(m3_t_nostrata)
@@ -1068,13 +1167,16 @@ res<- simulateResiduals(m3_t_nostrata)
 plotQQunif(res)
 plotResiduals(res)
 check_residuals(m3_t_nostrata)
-#DECISION: Model does not converge
+#DECISION: DOES not converge
 
 
 #Vegetation presence: t_family, status, season and veg presence as fixed, subsite as random
 m4_t_vegpresence<- glmmTMB(formula = dailyflux_trans~status*season*vegpresence + (1|subsite), 
                            data = du_co2,
                            family = t_family(),
+                           control = glmmTMBControl(
+                             optCtrl = list(iter.max = 5000, eval.max = 5000)
+                           ),
                            dispformula = ~1)
 #Evaluate basic model:
 check_convergence(m4_t_vegpresence)
@@ -1087,6 +1189,8 @@ plotQQunif(res)
 plotResiduals(res)
 check_residuals(m4_t_vegpresence)
 #DECISION: good residuals
+
+
 
 #Compare models 
 anova(m1_gaus_nostrata,m4_t_vegpresence)
@@ -1128,6 +1232,9 @@ table_trans %>%
 m1_gaus_nostrata<- glmmTMB(formula = dailyflux_trans~status*season + (1|subsite), 
                            data = ri_co2,
                            family = gaussian(),
+                           control = glmmTMBControl(
+                             optCtrl = list(iter.max = 5000, eval.max = 5000)
+                           ),
                            dispformula = ~1)
 #Evaluate basic model:
 check_convergence(m1_gaus_nostrata)
@@ -1149,6 +1256,9 @@ if (F){
 m3_t_nostrata<- glmmTMB(formula = dailyflux_trans~status*season + (1|subsite), 
                         data = ri_co2,
                         family = t_family(),
+                        control = glmmTMBControl(
+                          optCtrl = list(iter.max = 5000, eval.max = 5000)
+                        ),
                         dispformula = ~1)
 #Evaluate basic model:
 check_convergence(m3_t_nostrata)
@@ -1204,6 +1314,9 @@ table_trans %>%
 m1_gaus_nostrata<- glmmTMB(formula = dailyflux_trans~status*season + (1|subsite), 
                            data = va_co2,
                            family = gaussian(),
+                           control = glmmTMBControl(
+                             optCtrl = list(iter.max = 5000, eval.max = 5000)
+                           ),
                            dispformula = ~1)
 #Evaluate basic model:
 check_convergence(m1_gaus_nostrata)
@@ -1222,6 +1335,9 @@ check_residuals(m1_gaus_nostrata)
 m2_gaus_vegpresence<- glmmTMB(formula = dailyflux_trans~status*season*vegpresence + (1|subsite), 
                               data = va_co2,
                               family = gaussian(),
+                              control = glmmTMBControl(
+                                optCtrl = list(iter.max = 5000, eval.max = 5000)
+                              ),
                               dispformula = ~1)
 #Evaluate model:
 check_convergence(m2_gaus_vegpresence)
@@ -1241,6 +1357,9 @@ check_residuals(m2_gaus_vegpresence)
 m3_t_nostrata<- glmmTMB(formula = dailyflux_trans~status*season + (1|subsite), 
                         data = va_co2,
                         family = t_family(),
+                        control = glmmTMBControl(
+                          optCtrl = list(iter.max = 5000, eval.max = 5000)
+                        ),
                         dispformula = ~1)
 #Evaluate basic model:
 check_convergence(m3_t_nostrata)
@@ -1252,13 +1371,16 @@ res<- simulateResiduals(m3_t_nostrata)
 plotQQunif(res)
 plotResiduals(res)
 check_residuals(m3_t_nostrata)
-#DECISION: Model does not converge
+#DECISION: Bad residuals (BAD model)
 
 
 #Vegetation presence: t_family, status, season and veg presence as fixed, subsite as random
 m4_t_vegpresence<- glmmTMB(formula = dailyflux_trans~status*season*vegpresence + (1|subsite), 
                            data = va_co2,
                            family = t_family(),
+                           control = glmmTMBControl(
+                             optCtrl = list(iter.max = 5000, eval.max = 5000)
+                           ),
                            dispformula = ~1)
 #Evaluate basic model:
 check_convergence(m4_t_vegpresence)
@@ -1314,6 +1436,9 @@ table_trans %>%
 m1_gaus_nostrata<- glmmTMB(formula = dailyflux_trans~status*season + (1|subsite), 
                            data = ca_ch4,
                            family = gaussian(),
+                           control = glmmTMBControl(
+                             optCtrl = list(iter.max = 5000, eval.max = 5000)
+                           ),
                            dispformula = ~1)
 #Evaluate basic model:
 check_convergence(m1_gaus_nostrata)
@@ -1332,6 +1457,9 @@ check_residuals(m1_gaus_nostrata)
 m2_gaus_vegpresence<- glmmTMB(formula = dailyflux_trans~status*season*vegpresence + (1|subsite), 
                               data = ca_ch4,
                               family = gaussian(),
+                              control = glmmTMBControl(
+                                optCtrl = list(iter.max = 5000, eval.max = 5000)
+                              ),
                               dispformula = ~1)
 #Evaluate model:
 check_convergence(m2_gaus_vegpresence)
@@ -1352,6 +1480,9 @@ if(F){
 m3_t_nostrata<- glmmTMB(formula = dailyflux_trans~status*season + (1|subsite), 
                         data = ca_ch4,
                         family = t_family(),
+                        control = glmmTMBControl(
+                          optCtrl = list(iter.max = 5000, eval.max = 5000)
+                        ),
                         dispformula = ~1)
 #Evaluate basic model:
 check_convergence(m3_t_nostrata)
@@ -1369,6 +1500,9 @@ check_residuals(m3_t_nostrata)
 m4_t_vegpresence<- glmmTMB(formula = dailyflux_trans~status*season*vegpresence + (1|subsite), 
                            data = ca_ch4,
                            family = t_family(),
+                           control = glmmTMBControl(
+                             optCtrl = list(iter.max = 5000, eval.max = 5000)
+                           ),
                            dispformula = ~1)
 #Evaluate basic model:
 check_convergence(m4_t_vegpresence)
@@ -1425,6 +1559,9 @@ table_trans %>%
 m1_gaus_nostrata<- glmmTMB(formula = dailyflux_trans~status*season + (1|subsite), 
                            data = cu_ch4,
                            family = gaussian(),
+                           control = glmmTMBControl(
+                             optCtrl = list(iter.max = 5000, eval.max = 5000)
+                           ),
                            dispformula = ~1)
 #Evaluate basic model:
 check_convergence(m1_gaus_nostrata)
@@ -1436,13 +1573,16 @@ res<- simulateResiduals(m1_gaus_nostrata)
 plotQQunif(res)
 plotResiduals(res)
 check_residuals(m1_gaus_nostrata)
-#DECISION: Good-enough residuals
+#DECISION: Good residuals
 
 
 #Vegetation presence: gaussian, status, season and veg presence as fixed, subsite as random
 m2_gaus_vegpresence<- glmmTMB(formula = dailyflux_trans~status*season*vegpresence + (1|subsite), 
                               data = cu_ch4,
                               family = gaussian(),
+                              control = glmmTMBControl(
+                                optCtrl = list(iter.max = 5000, eval.max = 5000)
+                              ),
                               dispformula = ~1)
 #Evaluate model:
 check_convergence(m2_gaus_vegpresence)
@@ -1464,6 +1604,9 @@ if(F){
 m3_t_nostrata<- glmmTMB(formula = dailyflux_trans~status*season + (1|subsite), 
                         data = cu_ch4,
                         family = t_family(),
+                        control = glmmTMBControl(
+                          optCtrl = list(iter.max = 5000, eval.max = 5000)
+                        ),
                         dispformula = ~1)
 #Evaluate basic model:
 check_convergence(m3_t_nostrata)
@@ -1482,6 +1625,9 @@ check_residuals(m3_t_nostrata)
 m4_t_vegpresence<- glmmTMB(formula = dailyflux_trans~status*season*vegpresence + (1|subsite), 
                            data = cu_ch4,
                            family = t_family(),
+                           control = glmmTMBControl(
+                             optCtrl = list(iter.max = 5000, eval.max = 5000)
+                           ),
                            dispformula = ~1)
 #Evaluate basic model:
 check_convergence(m4_t_vegpresence)
@@ -1534,6 +1680,9 @@ table_trans %>%
 m1_gaus_nostrata<- glmmTMB(formula = dailyflux_trans~status*season + (1|subsite), 
                            data = da_ch4,
                            family = gaussian(),
+                           control = glmmTMBControl(
+                             optCtrl = list(iter.max = 5000, eval.max = 5000)
+                           ),
                            dispformula = ~1)
 #Evaluate basic model:
 check_convergence(m1_gaus_nostrata)
@@ -1552,6 +1701,9 @@ check_residuals(m1_gaus_nostrata)
 m2_gaus_vegpresence<- glmmTMB(formula = dailyflux_trans~status*season*vegpresence + (1|subsite), 
                               data = da_ch4,
                               family = gaussian(),
+                              control = glmmTMBControl(
+                                optCtrl = list(iter.max = 5000, eval.max = 5000)
+                              ),
                               dispformula = ~1)
 #Evaluate model:
 check_convergence(m2_gaus_vegpresence)
@@ -1571,6 +1723,9 @@ check_residuals(m2_gaus_vegpresence)
 m3_t_nostrata<- glmmTMB(formula = dailyflux_trans~status*season + (1|subsite), 
                         data = da_ch4,
                         family = t_family(),
+                        control = glmmTMBControl(
+                          optCtrl = list(iter.max = 5000, eval.max = 5000)
+                        ),
                         dispformula = ~1)
 #Evaluate basic model:
 check_convergence(m3_t_nostrata)
@@ -1582,13 +1737,15 @@ res<- simulateResiduals(m3_t_nostrata)
 plotQQunif(res)
 plotResiduals(res)
 check_residuals(m3_t_nostrata)
-#DECISION: Better residuals, although they still fail
-
+#DECISION: Bad residuals
 
 #Vegetation presence: t_family, status, season and veg presence as fixed, subsite as random
 m4_t_vegpresence<- glmmTMB(formula = dailyflux_trans~status*season*vegpresence + (1|subsite), 
                            data = da_ch4,
                            family = t_family(),
+                           control = glmmTMBControl(
+                             optCtrl = list(iter.max = 5000, eval.max = 5000)
+                           ),
                            dispformula = ~1)
 #Evaluate basic model:
 check_convergence(m4_t_vegpresence)
@@ -1602,8 +1759,11 @@ plotResiduals(res)
 check_residuals(m4_t_vegpresence)
 #Better residuals, although they present issues
 
+
 #Compare models 
-anova(m3_t_nostrata,m4_t_vegpresence)
+anova(m1_gaus_nostrata,m3_t_nostrata)
+anova(m2_gaus_vegpresence, m4_t_vegpresence)
+anova(m3_t_nostrata, m4_t_vegpresence)
 #Adding vegpresence is significantly better (better fit worth complexity increase)
 
 #Save best models (simple and complex best)
@@ -1641,6 +1801,9 @@ table_trans %>%
 m1_gaus_nostrata<- glmmTMB(formula = dailyflux_trans~status*season + (1|subsite), 
                            data = du_ch4,
                            family = gaussian(),
+                           control = glmmTMBControl(
+                             optCtrl = list(iter.max = 5000, eval.max = 5000)
+                           ),
                            dispformula = ~1)
 #Evaluate basic model:
 check_convergence(m1_gaus_nostrata)
@@ -1658,6 +1821,9 @@ check_residuals(m1_gaus_nostrata)
 m2_gaus_vegpresence<- glmmTMB(formula = dailyflux_trans~status*season*vegpresence + (1|subsite), 
                               data = du_ch4,
                               family = gaussian(),
+                              control = glmmTMBControl(
+                                optCtrl = list(iter.max = 5000, eval.max = 5000)
+                              ),
                               dispformula = ~1)
 #Evaluate model:
 check_convergence(m2_gaus_vegpresence)
@@ -1679,6 +1845,9 @@ if(F){
 m3_t_nostrata<- glmmTMB(formula = dailyflux_trans~status*season + (1|subsite), 
                         data = du_ch4,
                         family = t_family(),
+                        control = glmmTMBControl(
+                          optCtrl = list(iter.max = 5000, eval.max = 5000)
+                        ),
                         dispformula = ~1)
 #Evaluate basic model:
 check_convergence(m3_t_nostrata)
@@ -1696,6 +1865,9 @@ check_residuals(m3_t_nostrata)
 m4_t_vegpresence<- glmmTMB(formula = dailyflux_trans~status*season*vegpresence + (1|subsite), 
                            data = du_ch4,
                            family = t_family(),
+                           control = glmmTMBControl(
+                             optCtrl = list(iter.max = 5000, eval.max = 5000)
+                           ),
                            dispformula = ~1)
 #Evaluate basic model:
 check_convergence(m4_t_vegpresence)
@@ -1750,6 +1922,9 @@ table_trans %>%
 m1_gaus_nostrata<- glmmTMB(formula = dailyflux_trans~status*season + (1|subsite), 
                            data = ri_ch4,
                            family = gaussian(),
+                           control = glmmTMBControl(
+                             optCtrl = list(iter.max = 5000, eval.max = 5000)
+                           ),
                            dispformula = ~1)
 #Evaluate basic model:
 check_convergence(m1_gaus_nostrata)
@@ -1770,6 +1945,9 @@ if(F){
   m2_gaus_vegpresence<- glmmTMB(formula = dailyflux_trans~status*season*vegpresence + (1|subsite), 
                                 data = ri_ch4,
                                 family = gaussian(),
+                                control = glmmTMBControl(
+                                  optCtrl = list(iter.max = 5000, eval.max = 5000)
+                                ),
                                 dispformula = ~1)
   #Evaluate model:
   check_convergence(m2_gaus_vegpresence)
@@ -1791,6 +1969,9 @@ if(F){
   m3_t_nostrata<- glmmTMB(formula = dailyflux_trans~status*season + (1|subsite), 
                           data = ri_ch4,
                           family = t_family(),
+                          control = glmmTMBControl(
+                            optCtrl = list(iter.max = 5000, eval.max = 5000)
+                          ),
                           dispformula = ~1)
   #Evaluate basic model:
   check_convergence(m3_t_nostrata)
@@ -1809,6 +1990,9 @@ if(F){
   m4_t_vegpresence<- glmmTMB(formula = dailyflux_trans~status*season*vegpresence + (1|subsite), 
                              data = ri_ch4,
                              family = t_family(),
+                             control = glmmTMBControl(
+                               optCtrl = list(iter.max = 5000, eval.max = 5000)
+                             ),
                              dispformula = ~1)
   #Evaluate basic model:
   check_convergence(m4_t_vegpresence)
@@ -1866,6 +2050,9 @@ table_trans %>%
 m1_gaus_nostrata<- glmmTMB(formula = dailyflux_trans~status*season + (1|subsite), 
                            data = va_ch4,
                            family = gaussian(),
+                           control = glmmTMBControl(
+                             optCtrl = list(iter.max = 5000, eval.max = 5000)
+                           ),
                            dispformula = ~1)
 #Evaluate basic model:
 check_convergence(m1_gaus_nostrata)
@@ -1883,6 +2070,9 @@ check_residuals(m1_gaus_nostrata)
 m2_gaus_vegpresence<- glmmTMB(formula = dailyflux_trans~status*season*vegpresence + (1|subsite), 
                               data = va_ch4,
                               family = gaussian(),
+                              control = glmmTMBControl(
+                                optCtrl = list(iter.max = 5000, eval.max = 5000)
+                              ),
                               dispformula = ~1)
 #Evaluate model:
 check_convergence(m2_gaus_vegpresence)
@@ -1894,16 +2084,18 @@ res<- simulateResiduals(m2_gaus_vegpresence)
 plotQQunif(res)
 plotResiduals(res)
 check_residuals(m2_gaus_vegpresence)
-#DECISION: GOOD residuals
+#DECISION: Significant outliers detected 
 
 
-#SKIP t-family options, Gaussian already good
-if(F){
 #T_family:
+if(F){
 #Most basic: t_family, only status and season 
 m3_t_nostrata<- glmmTMB(formula = dailyflux_trans~status*season + (1|subsite), 
                         data = va_ch4,
                         family = t_family(),
+                        control = glmmTMBControl(
+                          optCtrl = list(iter.max = 5000, eval.max = 5000)
+                        ),
                         dispformula = ~1)
 #Evaluate basic model:
 check_convergence(m3_t_nostrata)
@@ -1918,15 +2110,18 @@ em<- emmeans(m3_t_nostrata, ~ status, weights = "equal")
 summary(em)
 pairs(em)
 #DECISION:
-
+}
 
 #Vegetation presence: t_family, status, season and veg presence as fixed, subsite as random
 m4_t_vegpresence<- glmmTMB(formula = dailyflux_trans~status*season*vegpresence + (1|subsite), 
                            data = va_ch4,
                            family = t_family(),
+                           control = glmmTMBControl(
+                             optCtrl = list(iter.max = 5000, eval.max = 5000)
+                           ),
                            dispformula = ~1)
 #Evaluate basic model:
-check_convergence(m4_t_vegpresence) #OK
+check_convergence(m4_t_vegpresence)
 check_singularity(m4_t_vegpresence,tolerance = 1e-8)
 r2(m4_t_vegpresence, tolerance = 1e-10)
 Anova(m4_t_vegpresence)
@@ -1934,19 +2129,16 @@ res<- simulateResiduals(m4_t_vegpresence)
 plotQQunif(res)
 plotResiduals(res)
 check_residuals(m4_t_vegpresence)
-em<- emmeans(m4_t_vegpresence, ~ status, weights = "proportional")
-summary(em)
-pairs(em)
-#DECISION:
-}
+#DECISION: Good residuals
 
 #Compare models 
-anova(m1_gaus_nostrata,m2_gaus_vegpresence)
+anova(m2_gaus_vegpresence, m4_t_vegpresence)# T-family significantly better than gaussian
+anova(m1_gaus_nostrata,m4_t_vegpresence)
 #Adding vegpresence is significantly better (better fit worth complexity increase)
 
 #Save best models (simple and complex best)
 va_simplemodel_ch4<- m1_gaus_nostrata
-va_complexmodel_ch4<- m2_gaus_vegpresence
+va_complexmodel_ch4<- m4_t_vegpresence
 
 
 #PLot observed vs predicted of two options: 
@@ -1956,648 +2148,6 @@ plot_obs_vs_pred_models(model1 = va_simplemodel_ch4,
                         color_var = "vegpresence")
 
 ggsave(filename = "VA_ch4_Observed_VS_predicted.png", 
-       width = 160,height = 120,units = "mm",device = "png",dpi = 400,
-       path = extraplots_path
-)
-
-
-
-
-#GWP______-------
-
-##2.1. CA_GWPco2andch4 (ok) -------
-
-#Subset data and check transformation: 
-ca_GWPco2andch4<- data4models %>% filter(casepilot=="CA"&ghgspecies=="GWPco2andch4")
-
-#See effect of transformation:
-table_trans %>%
-  filter(casepilot=="CA"&
-           ghgspecies=="GWPco2andch4") %>%
-  pull(bn_result) %>%
-  pluck(1) %>% 
-  plot_bestNormalize()
-
-
-#Most basic: gaussian, only status and season 
-m1_gaus_nostrata<- glmmTMB(formula = dailyflux_trans~status*season + (1|subsite), 
-                           data = ca_GWPco2andch4,
-                           family = gaussian(),
-                           dispformula = ~1)
-#Evaluate basic model:
-check_convergence(m1_gaus_nostrata)
-check_singularity(m1_gaus_nostrata,tolerance = 1e-8)
-r2(m1_gaus_nostrata, tolerance = 1e-10) 
-Anova(m1_gaus_nostrata)
-res<- simulateResiduals(m1_gaus_nostrata)
-plotQQunif(res)
-plotResiduals(res)
-check_residuals(m1_gaus_nostrata)
-#DECISION: Good residuals, keep
-
-
-
-#Vegetation presence: gaussian, status, season and veg presence as fixed, subsite as random
-m2_gaus_vegpresence<- glmmTMB(formula = dailyflux_trans~status*season*vegpresence + (1|subsite), 
-                              data = ca_GWPco2andch4,
-                              family = gaussian(),
-                              dispformula = ~1)
-#Evaluate model:
-check_convergence(m2_gaus_vegpresence)
-check_singularity(m2_gaus_vegpresence,tolerance = 1e-8)
-r2(m2_gaus_vegpresence, tolerance = 1e-10)
-Anova(m2_gaus_vegpresence)
-res<- simulateResiduals(m2_gaus_vegpresence)
-plotQQunif(res)
-plotResiduals(res)
-check_residuals(m2_gaus_vegpresence)
-#DECISION: BAD residuals
-
-
-  #T_family:
-  #Most basic: t_family, only status and season 
-  m3_t_nostrata<- glmmTMB(formula = dailyflux_trans~status*season + (1|subsite), 
-                          data = ca_GWPco2andch4,
-                          family = t_family(),
-                          dispformula = ~1)
-  #Evaluate basic model:
-  check_convergence(m3_t_nostrata)
-  check_singularity(m3_t_nostrata,tolerance = 1e-8) 
-  r2(m3_t_nostrata, tolerance=1e-10) 
-  Anova(m3_t_nostrata)
-  res<- simulateResiduals(m3_t_nostrata)
-  plotQQunif(res)
-  plotResiduals(res)
-  check_residuals(m3_t_nostrata)
-  #DECISION: Good residuals
-  
-  
-  #Vegetation presence: t_family, status, season and veg presence as fixed, subsite as random
-  m4_t_vegpresence<- glmmTMB(formula = dailyflux_trans~status*season*vegpresence + (1|subsite), 
-                             data = ca_GWPco2andch4,
-                             family = t_family(),
-                             dispformula = ~1)
-  #Evaluate basic model:
-  check_convergence(m4_t_vegpresence)
-  check_singularity(m4_t_vegpresence,tolerance = 1e-8)
-  r2(m4_t_vegpresence, tolerance = 1e-9)
-  Anova(m4_t_vegpresence)
-  res<- simulateResiduals(m4_t_vegpresence)
-  plotQQunif(res)
-  plotResiduals(res)
-  check_residuals(m4_t_vegpresence)
-  #DECISION: Good  residuals
-  
-
-#Compare models 
-anova(m1_gaus_nostrata,m4_t_vegpresence)
-#Adding vegpresence does significantly improve results
-
-#Save best models (simple and complex best)
-ca_simplemodel_GWPco2andch4<- m1_gaus_nostrata
-ca_complexmodel_GWPco2andch4<- m4_t_vegpresence
-
-
-#PLot observed vs predicted of two options: 
-plot_obs_vs_pred_models(model1 = ca_simplemodel_GWPco2andch4, 
-                        model2 = ca_complexmodel_GWPco2andch4,
-                        data=ca_GWPco2andch4,
-                        color_var = "vegpresence")
-
-ggsave(filename = "CA_GWPco2andch4_Observed_VS_predicted.png", 
-       width = 160,height = 120,units = "mm",device = "png",dpi = 400,
-       path = extraplots_path
-)
-
-
-
-
-##2.2. CU_GWPco2andch4 (ok) -------
-
-#Subset data and check transformation: 
-cu_GWPco2andch4<- data4models %>% filter(casepilot=="CU"&ghgspecies=="GWPco2andch4")
-
-#See effect of transformation:
-table_trans %>%
-  filter(casepilot=="CU"&
-           ghgspecies=="GWPco2andch4") %>%
-  pull(bn_result) %>%
-  pluck(1) %>% 
-  plot_bestNormalize()
-
-
-#Most basic: gaussian, only status and season 
-m1_gaus_nostrata<- glmmTMB(formula = dailyflux_trans~status*season + (1|subsite), 
-                           data = cu_GWPco2andch4,
-                           family = gaussian(),
-                           dispformula = ~1)
-#Evaluate basic model:
-check_convergence(m1_gaus_nostrata)
-check_singularity(m1_gaus_nostrata,tolerance = 1e-8)
-r2(m1_gaus_nostrata, tolerance = 1e-10) 
-Anova(m1_gaus_nostrata)
-summary(m1_gaus_nostrata)
-res<- simulateResiduals(m1_gaus_nostrata)
-plotQQunif(res)
-plotResiduals(res)
-check_residuals(m1_gaus_nostrata)
-#DECISION: BAD residuals
-
-
-#Vegetation presence: gaussian, status, season and veg presence as fixed, subsite as random
-m2_gaus_vegpresence<- glmmTMB(formula = dailyflux_trans~status*season*vegpresence + (1|subsite), 
-                              data = cu_GWPco2andch4,
-                              family = gaussian(),
-                              dispformula = ~1)
-#Evaluate model:
-check_convergence(m2_gaus_vegpresence)
-check_singularity(m2_gaus_vegpresence,tolerance = 1e-8)
-r2(m2_gaus_vegpresence, tolerance = 1e-10)
-Anova(m2_gaus_vegpresence)
-summary(m2_gaus_vegpresence)
-res<- simulateResiduals(m2_gaus_vegpresence)
-plotQQunif(res)
-plotResiduals(res)
-check_residuals(m2_gaus_vegpresence)
-#DECISION: BAD residuals
-
-
-  #T_family:
-  #Most basic: t_family, only status and season 
-  m3_t_nostrata<- glmmTMB(formula = dailyflux_trans~status*season + (1|subsite), 
-                          data = cu_GWPco2andch4,
-                          family = t_family(),
-                          dispformula = ~1)
-  #Evaluate basic model:
-  check_convergence(m3_t_nostrata)
-  check_singularity(m3_t_nostrata,tolerance = 1e-8) 
-  r2(m3_t_nostrata, tolerance=1e-10) 
-  Anova(m3_t_nostrata)
-  summary(m3_t_nostrata)
-  res<- simulateResiduals(m3_t_nostrata)
-  plotQQunif(res)
-  plotResiduals(res)
-  check_residuals(m3_t_nostrata)
-  #DECISION: Good enough residuals
-  
-  
-  #Vegetation presence: t_family, status, season and veg presence as fixed, subsite as random
-  m4_t_vegpresence<- glmmTMB(formula = dailyflux_trans~status*season*vegpresence + (1|subsite), 
-                             data = cu_GWPco2andch4,
-                             family = t_family(),
-                             dispformula = ~1)
-  #Evaluate basic model:
-  check_convergence(m4_t_vegpresence)
-  check_singularity(m4_t_vegpresence,tolerance = 1e-8)
-  r2(m4_t_vegpresence, tolerance = 1e-9)
-  Anova(m4_t_vegpresence)
-  summary(m4_t_vegpresence)
-  res<- simulateResiduals(m4_t_vegpresence)
-  plotQQunif(res)
-  plotResiduals(res)
-  check_residuals(m4_t_vegpresence)
-  #DECISION: GOOD residuals
-
-#Compare models 
-anova(m3_t_nostrata,m4_t_vegpresence)
-#Adding vegpresence is significantly better (better fit worth complexity increase)
-
-#Save best models (simple and complex best)
-cu_simplemodel_GWPco2andch4<- m3_t_nostrata
-cu_complexmodel_GWPco2andch4<- m4_t_vegpresence
-
-
-#PLot observed vs predicted of two options: 
-plot_obs_vs_pred_models(model1 = cu_simplemodel_GWPco2andch4, 
-                        model2 = cu_complexmodel_GWPco2andch4,
-                        data=cu_GWPco2andch4,
-                        color_var = "vegpresence")
-
-ggsave(filename = "CU_GWPco2andch4_Observed_VS_predicted.png", 
-       width = 160,height = 120,units = "mm",device = "png",dpi = 400,
-       path = extraplots_path
-)
-
-##2.3. DA_GWPco2andch4 (ok) -------
-
-#Subset data and check transformation: 
-da_GWPco2andch4<- data4models %>% filter(casepilot=="DA"&ghgspecies=="GWPco2andch4")
-
-#See effect of transformation:
-table_trans %>%
-  filter(casepilot=="DA"&
-           ghgspecies=="GWPco2andch4") %>%
-  pull(bn_result) %>%
-  pluck(1) %>% 
-  plot_bestNormalize()
-
-
-#Most basic: gaussian, only status and season 
-m1_gaus_nostrata<- glmmTMB(formula = dailyflux_trans~status*season + (1|subsite), 
-                           data = da_GWPco2andch4,
-                           family = gaussian(),
-                           dispformula = ~1)
-#Evaluate basic model:
-check_convergence(m1_gaus_nostrata)
-check_singularity(m1_gaus_nostrata,tolerance = 1e-8)
-r2(m1_gaus_nostrata, tolerance = 1e-10) 
-Anova(m1_gaus_nostrata)
-summary(m1_gaus_nostrata)
-res<- simulateResiduals(m1_gaus_nostrata)
-plotQQunif(res)
-plotResiduals(res)
-check_residuals(m1_gaus_nostrata)
-#DECISION: Bad residuals
-
-
-#Vegetation presence: gaussian, status, season and veg presence as fixed, subsite as random
-m2_gaus_vegpresence<- glmmTMB(formula = dailyflux_trans~status*season*vegpresence + (1|subsite), 
-                              data = da_GWPco2andch4,
-                              family = gaussian(),
-                              dispformula = ~1)
-#Evaluate model:
-check_convergence(m2_gaus_vegpresence)
-check_singularity(m2_gaus_vegpresence,tolerance = 1e-8)
-r2(m2_gaus_vegpresence, tolerance = 1e-10)
-Anova(m2_gaus_vegpresence)
-summary(m2_gaus_vegpresence)
-res<- simulateResiduals(m2_gaus_vegpresence)
-plotQQunif(res)
-plotResiduals(res)
-check_residuals(m2_gaus_vegpresence)
-#DECISION: BAD residuals
-
-
-
-#T_family:
-#Most basic: t_family, only status and season 
-m3_t_nostrata<- glmmTMB(formula = dailyflux_trans~status*season + (1|subsite), 
-                        data = da_GWPco2andch4,
-                        family = t_family(),
-                        dispformula = ~1)
-#Evaluate basic model:
-check_convergence(m3_t_nostrata)
-check_singularity(m3_t_nostrata,tolerance = 1e-8) 
-r2(m3_t_nostrata, tolerance=1e-11) 
-Anova(m3_t_nostrata)
-summary(m3_t_nostrata)
-res<- simulateResiduals(m3_t_nostrata)
-plotQQunif(res)
-plotResiduals(res)
-check_residuals(m3_t_nostrata)
-#DECISION: Better residuals, although they still have issues
-
-
-#Vegetation presence: t_family, status, season and veg presence as fixed, subsite as random
-m4_t_vegpresence<- glmmTMB(formula = dailyflux_trans~status*season*vegpresence + (1|subsite), 
-                           data = da_GWPco2andch4,
-                           family = t_family(),
-                           dispformula = ~1)
-#Evaluate basic model:
-check_convergence(m4_t_vegpresence)
-check_singularity(m4_t_vegpresence,tolerance = 1e-8)
-r2(m4_t_vegpresence, tolerance = 1e-11)
-Anova(m4_t_vegpresence)
-summary(m4_t_vegpresence)
-res<- simulateResiduals(m4_t_vegpresence)
-plotQQunif(res)
-plotResiduals(res)
-check_residuals(m4_t_vegpresence)
-#Better residuals, although they present issues
-
-#Compare models 
-anova(m3_t_nostrata,m4_t_vegpresence)
-#Adding vegpresence is significantly better (better fit worth complexity increase)
-
-#Save best models (simple and complex best)
-da_simplemodel_GWPco2andch4<- m3_t_nostrata
-da_complexmodel_GWPco2andch4<- m4_t_vegpresence
-
-
-#PLot observed vs predicted of two options: 
-plot_obs_vs_pred_models(model1 = da_simplemodel_GWPco2andch4, 
-                        model2 = da_complexmodel_GWPco2andch4,
-                        data=da_GWPco2andch4,
-                        color_var = "vegpresence")
-
-ggsave(filename = "DA_GWPco2andch4_Observed_VS_predicted.png", 
-       width = 160,height = 120,units = "mm",device = "png",dpi = 400,
-       path = extraplots_path
-)
-
-
-##2.1. DU_GWPco2andch4 (ok) -------
-
-#Subset data and check transformation: 
-du_GWPco2andch4<- data4models %>% filter(casepilot=="DU"&ghgspecies=="GWPco2andch4")
-
-#See effect of transformation:
-table_trans %>%
-  filter(casepilot=="DU"&
-           ghgspecies=="GWPco2andch4") %>%
-  pull(bn_result) %>%
-  pluck(1) %>% 
-  plot_bestNormalize()
-
-
-#Most basic: gaussian, only status and season 
-m1_gaus_nostrata<- glmmTMB(formula = dailyflux_trans~status*season + (1|subsite), 
-                           data = du_GWPco2andch4,
-                           family = gaussian(),
-                           dispformula = ~1)
-#Evaluate basic model:
-check_convergence(m1_gaus_nostrata)
-check_singularity(m1_gaus_nostrata,tolerance = 1e-8)
-r2(m1_gaus_nostrata, tolerance = 1e-10) 
-Anova(m1_gaus_nostrata)
-res<- simulateResiduals(m1_gaus_nostrata)
-plotQQunif(res)
-plotResiduals(res)
-check_residuals(m1_gaus_nostrata)
-#DECISION: Bad residuals
-
-
-#Vegetation presence: gaussian, status, season and veg presence as fixed, subsite as random
-m2_gaus_vegpresence<- glmmTMB(formula = dailyflux_trans~status*season*vegpresence + (1|subsite), 
-                              data = du_GWPco2andch4,
-                              family = gaussian(),
-                              dispformula = ~1)
-#Evaluate model:
-check_convergence(m2_gaus_vegpresence)
-check_singularity(m2_gaus_vegpresence,tolerance = 1e-8)
-r2(m2_gaus_vegpresence, tolerance = 1e-10)
-Anova(m2_gaus_vegpresence)
-summary(m2_gaus_vegpresence)
-res<- simulateResiduals(m2_gaus_vegpresence)
-plotQQunif(res)
-plotResiduals(res)
-check_residuals(m2_gaus_vegpresence)
-#DECISION: GOOD-enough residuals
-
-
-  #T_family:
-  #Most basic: t_family, only status and season 
-  m3_t_nostrata<- glmmTMB(formula = dailyflux_trans~status*season + (1|subsite), 
-                          data = du_GWPco2andch4,
-                          family = t_family(),
-                          dispformula = ~1)
-  #Evaluate basic model:
-  check_convergence(m3_t_nostrata)
-  check_singularity(m3_t_nostrata,tolerance = 1e-8) 
-  r2(m3_t_nostrata, tolerance=1e-10) 
-  Anova(m3_t_nostrata)
-  res<- simulateResiduals(m3_t_nostrata)
-  plotQQunif(res)
-  plotResiduals(res)
-  check_residuals(m3_t_nostrata)
-  #DECISION: DOES NOT CONVERGE
-  
-  
-  #Vegetation presence: t_family, status, season and veg presence as fixed, subsite as random
-  m4_t_vegpresence<- glmmTMB(formula = dailyflux_trans~status*season*vegpresence + (1|subsite), 
-                             data = du_GWPco2andch4,
-                             family = t_family(),
-                             dispformula = ~1)
-  #Evaluate basic model:
-  check_convergence(m4_t_vegpresence)
-  check_singularity(m4_t_vegpresence,tolerance = 1e-8)
-  r2(m4_t_vegpresence, tolerance = 1e-10)
-  Anova(m4_t_vegpresence)
-  res<- simulateResiduals(m4_t_vegpresence)
-  plotQQunif(res)
-  plotResiduals(res)
-  check_residuals(m4_t_vegpresence)
-  #DECISION: good-enough
-
-#Compare models 
-anova(m1_gaus_nostrata,m2_gaus_vegpresence)
-#Adding vegpresence does significantly improve fit (worth the extra complexity)
-
-#Save best models (simple and complex best)
-du_simplemodel_GWPco2andch4<- m1_gaus_nostrata
-du_complexmodel_GWPco2andch4<- m2_gaus_vegpresence
-
-
-#PLot observed vs predicted of two options: 
-plot_obs_vs_pred_models(model1 = du_simplemodel_GWPco2andch4, 
-                        model2 = du_complexmodel_GWPco2andch4,
-                        data=du_GWPco2andch4,
-                        color_var = "vegpresence")
-
-ggsave(filename = "DU_GWPco2andch4_Observed_VS_predicted.png", 
-       width = 160,height = 120,units = "mm",device = "png",dpi = 400,
-       path = extraplots_path
-)
-
-##2.1. RI_GWPco2andch4 (ok) -------
-
-#Subset data and check transformation: 
-ri_GWPco2andch4<- data4models %>% filter(casepilot=="RI"&ghgspecies=="GWPco2andch4")
-
-#See effect of transformation:
-table_trans %>%
-  filter(casepilot=="RI"&
-           ghgspecies=="GWPco2andch4") %>%
-  pull(bn_result) %>%
-  pluck(1) %>% 
-  plot_bestNormalize()
-
-
-#Most basic: gaussian, only status and season 
-m1_gaus_nostrata<- glmmTMB(formula = dailyflux_trans~status*season + (1|subsite), 
-                           data = ri_GWPco2andch4,
-                           family = gaussian(),
-                           dispformula = ~1)
-#Evaluate basic model:
-check_convergence(m1_gaus_nostrata)
-check_singularity(m1_gaus_nostrata,tolerance = 1e-8)
-r2(m1_gaus_nostrata, tolerance = 1e-10) 
-Anova(m1_gaus_nostrata)
-summary(m1_gaus_nostrata)
-res<- simulateResiduals(m1_gaus_nostrata)
-plotQQunif(res)
-plotResiduals(res)
-check_residuals(m1_gaus_nostrata)
-#DECISION: GOOD residuals
-
-
-#SKIP! cannot include vegpresence as fixed with status, and gaus is already good
-if(F){
-  #Vegetation presence: gaussian, status, season and veg presence as fixed, subsite as random
-  m2_gaus_vegpresence<- glmmTMB(formula = dailyflux_trans~status*season*vegpresence + (1|subsite), 
-                                data = ri_GWPco2andch4,
-                                family = gaussian(),
-                                dispformula = ~1)
-  #Evaluate model:
-  check_convergence(m2_gaus_vegpresence) #OK
-  check_singularity(m2_gaus_vegpresence,tolerance = 1e-8) #
-  r2(m2_gaus_vegpresence, tolerance = 1e-10)
-  Anova(m2_gaus_vegpresence)
-  summary(m2_gaus_vegpresence)
-  res<- simulateResiduals(m2_gaus_vegpresence)
-  plotQQunif(res)
-  plotResiduals(res)
-  check_residuals(m2_gaus_vegpresence)
-  #DECISION: 
-
-#SKIP t_options: 
-
-#T_family:
-#Most basic: t_family, only status and season 
-m3_t_nostrata<- glmmTMB(formula = dailyflux_trans~status*season + (1|subsite), 
-                        data = ri_GWPco2andch4,
-                        family = t_family(),
-                        dispformula = ~1)
-#Evaluate basic model:
-check_convergence(m3_t_nostrata)
-check_singularity(m3_t_nostrata,tolerance = 1e-8) 
-r2(m3_t_nostrata, tolerance=1e-10) 
-Anova(m3_t_nostrata)
-res<- simulateResiduals(m3_t_nostrata)
-plotQQunif(res)
-plotResiduals(res)
-check_residuals(m3_t_nostrata)
-#DECISION:
-
-#SKIP, cannot include vegpresence as fixed effect
-  #Vegetation presence: t_family, status, season and veg presence as fixed, subsite as random
-  m4_t_vegpresence<- glmmTMB(formula = dailyflux_trans~status*season*vegpresence + (1|subsite), 
-                             data = ri_GWPco2andch4,
-                             family = t_family(),
-                             dispformula = ~1)
-  #Evaluate basic model:
-  check_convergence(m4_t_vegpresence)
-  check_singularity(m4_t_vegpresence,tolerance = 1e-8)
-  r2(m4_t_vegpresence, tolerance = 1e-10)
-  Anova(m4_t_vegpresence)
-  summary(m4_t_vegpresence)
-  res<- simulateResiduals(m4_t_vegpresence)
-  plotQQunif(res)
-  plotResiduals(res)
-  check_residuals(m4_t_vegpresence)
-  #DECISION: 
-}
-
-#Compare models: gaussian simple is already the best 
-# anova(m1_gaus_nostrata,m3_t_nostrata)
-
-#CANNOT HAVE VEGPRESENCE AS EFFECT FOR RIA DE AVEIRO, most basic model is best (and only allowed)
-
-#Save best models (simple and complex best)
-ri_simplemodel_GWPco2andch4<- m1_gaus_nostrata
-# ri_complexmodel_GWPco2andch4<- NA # Complex not possible
-
-
-#PLot observed vs predicted ONLY option: 
-plot_obs_vs_pred_models(model1 = ri_simplemodel_GWPco2andch4, 
-                        # model2 = ri_complexmodel_GWPco2andch4,
-                        data=ri_GWPco2andch4,
-                        color_var = "vegpresence")
-
-ggsave(filename = "RI_GWPco2andch4_Observed_VS_predicted.png", 
-       width = 160,height = 120,units = "mm",device = "png",dpi = 400,
-       path = extraplots_path
-)
-
-##2.1. VA_GWPco2andch4 (ok) -------
-
-#Subset data and check transformation: 
-va_GWPco2andch4<- data4models %>% filter(casepilot=="VA"&ghgspecies=="GWPco2andch4")
-
-#See effect of transformation:
-table_trans %>%
-  filter(casepilot=="VA"&
-           ghgspecies=="GWPco2andch4") %>%
-  pull(bn_result) %>%
-  pluck(1) %>% 
-  plot_bestNormalize()
-
-
-#Most basic: gaussian, only status and season 
-m1_gaus_nostrata<- glmmTMB(formula = dailyflux_trans~status*season + (1|subsite), 
-                           data = va_GWPco2andch4,
-                           family = gaussian(),
-                           dispformula = ~1)
-#Evaluate basic model:
-check_convergence(m1_gaus_nostrata)
-check_singularity(m1_gaus_nostrata,tolerance = 1e-8)
-r2(m1_gaus_nostrata, tolerance = 1e-10) 
-Anova(m1_gaus_nostrata)
-res<- simulateResiduals(m1_gaus_nostrata)
-plotQQunif(res)
-plotResiduals(res)
-check_residuals(m1_gaus_nostrata)
-#DECISION: BAD residuals 
-
-
-#Vegetation presence: gaussian, status, season and veg presence as fixed, subsite as random
-m2_gaus_vegpresence<- glmmTMB(formula = dailyflux_trans~status*season*vegpresence + (1|subsite), 
-                              data = va_GWPco2andch4,
-                              family = gaussian(),
-                              dispformula = ~1)
-#Evaluate model:
-check_convergence(m2_gaus_vegpresence)
-check_singularity(m2_gaus_vegpresence,tolerance = 1e-8)
-r2(m2_gaus_vegpresence, tolerance = 1e-10)
-Anova(m2_gaus_vegpresence)
-summary(m2_gaus_vegpresence)
-res<- simulateResiduals(m2_gaus_vegpresence)
-plotQQunif(res)
-plotResiduals(res)
-check_residuals(m2_gaus_vegpresence)
-#DECISION: BAD residuals 
-
-
-  #T_family:
-  #Most basic: t_family, only status and season 
-  m3_t_nostrata<- glmmTMB(formula = dailyflux_trans~status*season + (1|subsite), 
-                          data = va_GWPco2andch4,
-                          family = t_family(),
-                          dispformula = ~1)
-  #Evaluate basic model:
-  check_convergence(m3_t_nostrata)
-  check_singularity(m3_t_nostrata,tolerance = 1e-8) 
-  r2(m3_t_nostrata, tolerance=1e-10) 
-  Anova(m3_t_nostrata)
-  res<- simulateResiduals(m3_t_nostrata)
-  plotQQunif(res)
-  plotResiduals(res)
-  check_residuals(m3_t_nostrata)
-  #DECISION: DOES NOT CONVERGE
-  
-  
-  #Vegetation presence: t_family, status, season and veg presence as fixed, subsite as random
-  m4_t_vegpresence<- glmmTMB(formula = dailyflux_trans~status*season*vegpresence + (1|subsite), 
-                             data = va_GWPco2andch4,
-                             family = t_family(),
-                             dispformula = ~1)
-  #Evaluate basic model:
-  check_convergence(m4_t_vegpresence)
-  check_singularity(m4_t_vegpresence,tolerance = 1e-8)
-  r2(m4_t_vegpresence, tolerance = 1e-10)
-  Anova(m4_t_vegpresence)
-  res<- simulateResiduals(m4_t_vegpresence)
-  plotQQunif(res)
-  plotResiduals(res)
-  check_residuals(m4_t_vegpresence)
-  #DECISION:GOOD residuals
-
-#Compare models 
-anova(m1_gaus_nostrata,m4_t_vegpresence)
-#Adding vegpresence is significantly better (better fit worth complexity increase)
-
-#Save best models (simple and complex best)
-va_simplemodel_GWPco2andch4<- m1_gaus_nostrata
-va_complexmodel_GWPco2andch4<- m2_gaus_vegpresence
-
-
-#PLot observed vs predicted of two options: 
-plot_obs_vs_pred_models(model1 = va_simplemodel_GWPco2andch4, 
-                        model2 = va_complexmodel_GWPco2andch4,
-                        data=va_GWPco2andch4,
-                        color_var = "vegpresence")
-
-ggsave(filename = "VA_GWPco2andch4_Observed_VS_predicted.png", 
        width = 160,height = 120,units = "mm",device = "png",dpi = 400,
        path = extraplots_path
 )
@@ -2614,8 +2164,7 @@ ggsave(filename = "VA_GWPco2andch4_Observed_VS_predicted.png",
 #List of simple models for each casepilot*ghgspecies: only appropriate for RI 
 simplemodel_list_allghg<- list(
   "RI_co2" = ri_simplemodel_co2,
-  "RI_ch4" = ri_simplemodel_ch4,
-  "RI_GWPco2andch4" = ri_simplemodel_GWPco2andch4
+  "RI_ch4" = ri_simplemodel_ch4
 )
 
 #List of complex models for each casepilot*ghgspecies: all but RI 
@@ -2629,14 +2178,8 @@ complexmodel_list_allghg<- list(
   "CU_ch4" = cu_complexmodel_ch4, 
   "DA_ch4" = da_complexmodel_ch4,
   "DU_ch4" = du_complexmodel_ch4,
-  "VA_ch4" = va_complexmodel_ch4,
-  "CA_GWPco2andch4" = ca_complexmodel_GWPco2andch4,
-  "CU_GWPco2andch4" = cu_complexmodel_GWPco2andch4, 
-  "DA_GWPco2andch4" = da_complexmodel_GWPco2andch4,
-  "DU_GWPco2andch4" = du_complexmodel_GWPco2andch4,
-  "VA_GWPco2andch4" = va_complexmodel_GWPco2andch4
+  "VA_ch4" = va_complexmodel_ch4
 )
-
 
 
 
@@ -2687,608 +2230,297 @@ write.csv(x = all_complexmodel_outputs, file = paste0(path_2_modeloutputs,"Summa
 write.csv(x = complexmodel_resid_diag_summary, file = paste0(path_2_modeloutputs,"Residualtests_rest_chambermodels.csv"),row.names = F)
 
 
-##3.3. EMEANs & post-hoc----
 
-#When calculating emmeans: I have to use the full variance-covariance structure
-#to get accurate SEs. If the model is gaussian, we use t-test with Degrees of
-#freedom available (via Satterthwaite approximation) IF the model is t_family,
-#it will have Inf df, not an issue but forces to use z-test for post-hocs
-#instead (No DF calculation possible)
-
-#CLDs (group letters) should be assigned to emmeans based on the above pairwise
-#tests, do not repeat the test, but assign letters based on already calcualted
-#tests via (multcompLetters function). Additionally, re-code letters so that
-#they give emmean ranking info (letter "a" denotes the smallest-emmean
-#significant group, letter"b" the signficant group with the next lowest emmean
-
-#Calculate relevant emmeans and post-hocs tests: separately for simple model
-#list (status*season, only for RI) and complex model list
-#(status*season*vegpresence, for rest of casepilots)
-
-
-
-#DEDICATED FUNCTIONS:
-
-##function for emmeans------
-#=========================================================-
-# FUNCTION: custom_weighted_emmeans_backtrans
-#---------------------------------------------------------_
-# Calculates weighted emmeans (with custom weights) from a glmmTMB model.
-# Returns both model-scale and back-transformed emmeans with proper SEs and CIs (using full covariance matrix).
-# Back-transformation is done via the supplied BestNormalize object or custom inverse.
-#=========================================================-
-
-custom_weighted_emmeans_backtrans <- function(
-    model_object,       # glmmTMB model
-    trans_object,       # BestNormalize object (or similar, must support predict(inverse=TRUE))
-    grouping_vars,      # character vector of fixed effects to group by
-    custom_weights = FALSE, # logical: use custom_weight_df or not
-    custom_weight_df = NULL, # optional: data frame with all level combinations + prop_weight
-    conf_level = 0.95   # confidence level for CIs
-) {
-  library(emmeans)
-  library(dplyr)
-  library(numDeriv)
-  
-  #-------------------------------#
-  # Helper: critical value
-  #-------------------------------#
-  get_crit_value <- function(df, conf_level) {
-    alpha <- 1 - conf_level
-    if (is.infinite(df)) qnorm(1 - alpha / 2) else qt(1 - alpha / 2, df)
-  }
-  
-  #-------------------------------#
-  # Extract factor variables
-  #-------------------------------#
-  all_terms <- attr(terms(model_object), "term.labels")
-  factor_vars <- all_terms[
-    sapply(all_terms, function(v) is.factor(model.frame(model_object)[[v]]))
-  ]
-  
-  # Fallback: if none detected, warn user
-  if (length(factor_vars) == 0)
-    stop("No factor variables detected in the model.")
-  
-  #-------------------------------#
-  # Compute full emmeans object
-  #-------------------------------#
-  full_emms_object <- emmeans(model_object, specs = factor_vars)
-  vc <- vcov(full_emms_object)
-  emm_df <- as.data.frame(full_emms_object)
-  
-  #-------------------------------#
-  # Apply weighting scheme
-  #-------------------------------#
-  if (custom_weights) {
-    if (is.null(custom_weight_df))
-      stop("If custom_weights = TRUE, you must provide custom_weight_df.")
-    
-    # Merge with custom weights
-    emm_df <- emm_df %>%
-      left_join(custom_weight_df, by = factor_vars)
-    
-    if (any(is.na(emm_df$prop_weight)))
-      stop("Mismatch between factor levels and custom_weight_df.")
-    
-  } else {
-    # Use equal weights within each grouping
-    emm_df <- emm_df %>%
-      group_by(across(all_of(grouping_vars))) %>%
-      mutate(prop_weight = 1 / n()) %>%
-      ungroup()
-  }
-  
-  # Create unique labels for vcov indexing
-  emm_df <- emm_df %>%
-    mutate(row_label = do.call(paste, c(across(all_of(factor_vars)), sep = " ")))
-  
-  #-------------------------------#
-  # Group by user-specified variables
-  #-------------------------------#
-  grouped_df <- emm_df %>%
-    group_by(across(all_of(grouping_vars))) %>%
-    group_split()
-  
-  results_list <- list()
-  
-  #-------------------------------#
-  # Loop over groups
-  #-------------------------------#
-  for (group in grouped_df) {
-    group_label <- group %>%
-      dplyr::select(all_of(grouping_vars)) %>%
-      slice(1)
-    
-    w <- group$prop_weight / sum(group$prop_weight)
-    mu <- group$emmean
-    vc_sub <- vc[group$row_label, group$row_label, drop = FALSE]
-    
-    # Model-scale weighted mean and SE
-    emmean_og <- sum(w * mu)
-    SE_og <- sqrt(as.numeric(t(w) %*% vc_sub %*% w))
-    
-    df_val <- unique(group$df)
-    if (length(df_val) != 1) stop("Non-unique df within group.")
-    crit <- get_crit_value(df_val, conf_level)
-    
-    lower.CL_og <- emmean_og - crit * SE_og
-    upper.CL_og <- emmean_og + crit * SE_og
-    
-    #-------------------------------#
-    # Back-transform using delta method
-    #-------------------------------#
-    inv_fun <- function(x) predict(trans_object, x, inverse = TRUE)
-    deriv_fun <- function(x) numDeriv::grad(inv_fun, x)
-    
-    emmean_bt <- inv_fun(emmean_og)
-    deriv_val <- deriv_fun(emmean_og)
-    SE_bt <- abs(deriv_val) * SE_og
-    
-    lower.CL_bt <- emmean_bt - crit * SE_bt
-    upper.CL_bt <- emmean_bt + crit * SE_bt
-    
-    #-------------------------------#
-    # Store results
-    #-------------------------------#
-    res <- group_label %>%
-      mutate(
-        emmean_og = emmean_og,
-        SE_og = SE_og,
-        df = df_val,
-        lower.CL_og = lower.CL_og,
-        upper.CL_og = upper.CL_og,
-        emmean_bt = emmean_bt,
-        SE_bt = SE_bt,
-        lower.CL_bt = lower.CL_bt,
-        upper.CL_bt = upper.CL_bt
-      )
-    
-    collapsed_vars <- setdiff(factor_vars, grouping_vars)
-    for (v in collapsed_vars) res[[v]] <- NA
-    
-    results_list <- append(results_list, list(res))
-  }
-  
-  #-------------------------------#
-  # Combine all results
-  #-------------------------------#
-  final_df <- bind_rows(results_list) %>%
-    dplyr::select(all_of(grouping_vars),
-                  emmean_og, SE_og, lower.CL_og, upper.CL_og,
-                  emmean_bt, SE_bt, lower.CL_bt, upper.CL_bt,
-                  df, everything())
-  
-  return(final_df)
-}
+#cleanup of Global environment: 
+#we no longer need individual datasets, individual models, or summary tables.
+rm(ca_co2,cu_co2,da_co2,du_co2,ri_co2,va_co2,
+   ca_ch4,cu_ch4,da_ch4,du_ch4,ri_ch4,va_ch4,
+   ca_simplemodel_co2,ca_simplemodel_ch4,
+   cu_simplemodel_co2,cu_simplemodel_ch4,
+   da_simplemodel_co2,da_simplemodel_ch4,
+   du_simplemodel_co2,du_simplemodel_ch4,
+   ri_simplemodel_co2,ri_simplemodel_ch4,
+   va_simplemodel_co2,va_simplemodel_ch4,
+   ca_complexmodel_co2,ca_complexmodel_ch4,
+   cu_complexmodel_co2,cu_complexmodel_ch4,
+   da_complexmodel_co2,da_complexmodel_ch4,
+   du_complexmodel_co2,du_complexmodel_ch4,
+   #No RI complexmodel to remove
+   va_complexmodel_co2,va_complexmodel_ch4,
+   m1_gaus_nostrata,m2_gaus_vegpresence,m3_t_nostrata,m4_t_vegpresence,res,
+   complexmodel_fit, complexmodel_homoc_r2, complexmodel_resid_diag_summary, complexmodel_results_anova,
+   simplemodel_fit, simplemodel_homoc_r2, simplemodel_resid_diag_summary, simplemodel_results_anova)
 
 
-##function for contrats--------
-#=========================================================-
-# FUNCTION: custom_pairwise_contrasts_fullvcov
-#---------------------------------------------------------_
-# Calculates weighted pairwise contrasts using full covariance
-# structure among emmeans, not assuming independence.
-# Returns both model-scale and back-transformed contrasts.
-#=========================================================-
+#Bootstrap EMMEANS--------
+#We need to produce the paired bootstrap (allowing only valid datasets that contain all levels of factors used for modelling: all levels of status, season and vegpresence)
 
-custom_pairwise_contrasts_fullvcov <- function(
-    model_object,              # glmmTMB model
-    trans_object,              # BestNormalize or similar transformation object
-    compare_var,               # factor for which contrasts are computed
-    group_vars = character(0), # optional grouping variables
-    use_custom_weights = FALSE,# whether to use custom weights
-    custom_weight_df = NULL,   # optional custom weights df (must include prop_weight)
-    conf_level = 0.95,         # CI level
-    return_emmeans = FALSE     # return weighted emmeans if TRUE
-) {
-  library(emmeans)
-  library(dplyr)
-  library(purrr)
-  library(numDeriv)
+
+#1. set parallel plan ----
+plan(multisession, workers = parallel::detectCores() - 1)
+Nboot<- 5000 #Define number of bootstrap iterations
+
+#2. Define functions-----
+
+#Pair models: 
+# Groups models like "CA_co2", "CA_ch4" → list(CA = list(co2, ch4))
+pair_models <- function(model_list) {
   
-  #---------------------------------------------#
-  # Helper function: critical value for CI
-  #---------------------------------------------#
-  get_crit_value <- function(df, conf_level) {
-    alpha <- 1 - conf_level
-    if (is.infinite(df)) qnorm(1 - alpha / 2) else qt(1 - alpha / 2, df)
-  }
+  split_names <- sub("_(co2|ch4)$", "", names(model_list))
+  paired <- split(model_list, split_names)
   
-  #---------------------------------------------#
-  # STEP 1. Extract factor variables from model
-  #---------------------------------------------#
-  all_terms <- attr(terms(model_object), "term.labels")
-  factor_vars <- all_terms[
-    sapply(all_terms, function(v) is.factor(model.frame(model_object)[[v]]))
-  ]
-  if (length(factor_vars) == 0)
-    stop("No factor variables detected in model.")
-  
-  #---------------------------------------------#
-  # STEP 2. Compute emmeans + variance-covariance matrix
-  #---------------------------------------------#
-  full_emms <- emmeans(model_object, specs = factor_vars)
-  vc <- vcov(full_emms)
-  emm_df <- as.data.frame(full_emms)
-  
-  #---------------------------------------------#
-  # STEP 3. Apply weights (custom or equal)
-  #---------------------------------------------#
-  if (use_custom_weights) {
-    if (is.null(custom_weight_df))
-      stop("If use_custom_weights = TRUE, custom_weight_df must be provided.")
-    
-    emm_df <- emm_df %>%
-      left_join(custom_weight_df, by = factor_vars)
-    
-    if (any(is.na(emm_df$prop_weight)))
-      stop("Mismatch between factor levels and custom_weight_df.")
-  } else {
-    # Use equal weights across all combinations of the factor_vars
-    emm_df <- emm_df %>%
-      group_by(across(all_of(factor_vars))) %>%
-      mutate(prop_weight = 1 / n()) %>%
-      ungroup()
-  }
-  
-  # Create row labels for vcov indexing
-  emm_df <- emm_df %>%
-    mutate(row_label = do.call(paste, c(across(all_of(factor_vars)), sep = " ")))
-  
-  #---------------------------------------------#
-  # STEP 4. Compute weighted emmeans (model scale)
-  #---------------------------------------------#
-  grouping_vars_all <- unique(c(group_vars, compare_var))
-  grouped_df <- emm_df %>%
-    group_by(across(all_of(grouping_vars_all))) %>%
-    group_split()
-  
-  weighted_emmeans <- list()
-  
-  for (group in grouped_df) {
-    group_label <- group %>% dplyr::select(all_of(grouping_vars_all)) %>% slice(1)
-    
-    w <- group$prop_weight / sum(group$prop_weight)
-    mu <- group$emmean
-    vc_sub <- vc[group$row_label, group$row_label, drop = FALSE]
-    
-    emmean_og <- sum(w * mu)
-    SE_og <- sqrt(as.numeric(t(w) %*% vc_sub %*% w))
-    
-    df_val <- unique(group$df)
-    if (length(df_val) != 1) stop("Non-unique df within group.")
-    
-    weighted_emmeans <- append(weighted_emmeans, list(
-      group_label %>%
-        mutate(weights = list(w),
-               row_label = list(group$row_label),
-               emmean_og = emmean_og,
-               SE_og = SE_og,
-               df = df_val)
-    ))
-  }
-  
-  emmean_df <- bind_rows(weighted_emmeans)
-  
-  #---------------------------------------------#
-  # STEP 5. Compute pairwise contrasts
-  #---------------------------------------------#
-  contrast_groups <- if (length(group_vars) > 0) {
-    emmean_df %>% group_by(across(all_of(group_vars))) %>% group_split()
-  } else {
-    list(emmean_df)
-  }
-  
-  results <- purrr::map_dfr(contrast_groups, function(group_df) {
-    levels <- unique(group_df[[compare_var]])
-    combs <- combn(levels, 2, simplify = FALSE)
-    m <- length(combs)  # number of pairwise comparisons for Sidak correction
-    
-    df_val <- unique(group_df$df)
-    if (length(df_val) != 1) stop("Non-unique df within group.")
-    crit <- get_crit_value(df_val, conf_level)
-    
-    purrr::map_dfr(combs, function(pair) {
-      g1 <- group_df %>% filter(!!sym(compare_var) == pair[1])
-      g2 <- group_df %>% filter(!!sym(compare_var) == pair[2])
-      
-      #---------------------------------------------#
-      # Model-scale contrast (using full vcov)
-      #---------------------------------------------#
-      w1 <- unlist(g1$weights)
-      w2 <- unlist(g2$weights)
-      L <- numeric(nrow(vc))
-      idx1 <- match(unlist(g1$row_label), rownames(vc))
-      idx2 <- match(unlist(g2$row_label), rownames(vc))
-      L[idx1] <- w1
-      L[idx2] <- -w2
-      
-      estimate_og <- g1$emmean_og - g2$emmean_og
-      SE_og <- sqrt(as.numeric(t(L) %*% vc %*% L))
-      stat <- estimate_og / SE_og
-      
-      # test type + p-value
-      if (is.infinite(df_val)) {
-        test_used <- "Z.test"
-        p_value_raw <- 2 * pnorm(-abs(stat))
-      } else {
-        test_used <- "T.test"
-        p_value_raw <- 2 * pt(-abs(stat), df = df_val)
-      }
-      
-      # Sidak correction for multiple comparisons
-      p_value_sidak <- 1 - (1 - p_value_raw)^m
-      
-      lower.CL_og <- estimate_og - crit * SE_og
-      upper.CL_og <- estimate_og + crit * SE_og
-      
-      #---------------------------------------------#
-      # Back-transformation (delta method)
-      #---------------------------------------------#
-      inv_fun <- function(x) predict(trans_object, x, inverse = TRUE)
-      deriv_fun <- function(x) numDeriv::grad(inv_fun, x)
-      
-      mu1_bt <- inv_fun(g1$emmean_og)
-      mu2_bt <- inv_fun(g2$emmean_og)
-      d1 <- deriv_fun(g1$emmean_og)
-      d2 <- deriv_fun(g2$emmean_og)
-      
-      estimate_bt <- mu1_bt - mu2_bt
-      SE_bt <- sqrt((d1^2 * g1$SE_og^2) + (d2^2 * g2$SE_og^2))
-      lower.CL_bt <- estimate_bt - crit * SE_bt
-      upper.CL_bt <- estimate_bt + crit * SE_bt
-      
-      #---------------------------------------------#
-      # Return results
-      #---------------------------------------------#
-      res <- tibble(
-        contrast = paste0(pair[1], " - ", pair[2]),
-        !!compare_var := NA,
-        estimate_og = estimate_og,
-        SE_og = SE_og,
-        lower.CL_og = lower.CL_og,
-        upper.CL_og = upper.CL_og,
-        estimate_bt = estimate_bt,
-        SE_bt = SE_bt,
-        lower.CL_bt = lower.CL_bt,
-        upper.CL_bt = upper.CL_bt,
-        df = df_val,
-        stat.ratio = stat,
-        test_used = test_used,
-        # p.value_raw = p_value_raw, #omit raw p-value
-        p.value = p_value_sidak
-      )
-      
-      if (length(group_vars) > 0)
-        res <- bind_cols(group_df[1, group_vars, drop = FALSE], res)
-      
-      return(res)
-    })
+  # Force correct order: co2 first, ch4 second
+  paired <- lapply(paired, function(x) {
+    x[c(grep("co2", names(x)), grep("ch4", names(x)))]
   })
   
-  #---------------------------------------------#
-  # STEP 6. Organize output
-  #---------------------------------------------#
-  out <- results %>%
-    relocate(all_of(group_vars), .before = everything()) %>%
-    relocate(contrast, .before = everything()) %>% 
-    dplyr::select(-all_of(compare_var))
+  return(paired)
+}
+
+
+#function for simplemodels emmeans (status, season, status_within_season, all with equal weights)
+compute_emm_simple <- function(mod) {
+  # Build reference grid
+  rg <- ref_grid(mod)
+  # Compute emmeans
+  list(
+    status = suppressMessages(emmeans(rg, ~ status, weights = "equal")),
+    season = suppressMessages(emmeans(rg, ~ season, weights = "equal")),
+    inseason_status = suppressMessages(emmeans(rg, ~ status | season, weights = "equal"))
+  )
+}
+
+
+#function for complexmodels emmeans (status, season,status_within_season, status_within_vegpresence), using appropriate weights (from seasonal vegpresence distribution)
+compute_emm_complex <- function(mod, weights_df) {
   
-  if (return_emmeans) {
-    return(list(emmeans = emmean_df, contrasts = out))
-  } else {
-    return(out)
+  # Build reference grid
+  rg <- ref_grid(mod)
+  rg_df <- as.data.frame(rg)
+  
+  # Join custom weights to the reference grid of the model
+  rg_df <- rg_df %>%
+    left_join(weights_df,
+              by = c("status", "season", "vegpresence"))
+  
+  # Check missing weights (IMPORTANT)
+  if (any(is.na(rg_df$prop_weight))) {
+    stop("Missing weights after join")
   }
+  
+  # Attach weights
+  rg@grid$w <- rg_df$prop_weight
+  
+  #2. Calculate emmeans
+  
+  # STATUS (equal across seasons for overall annual effect, but taking into account seasonally variable vegetation presence)
+  emm_status <- suppressMessages(emmeans(rg, ~ status | season, weights = "proportional"))
+  emm_status <- suppressMessages(emmeans(emm_status, ~ status, weights = "equal"))
+  
+  # SEASON (equal across status for overall seasonal effect, but taking into account status-variable vegetation presence)
+  emm_season <- suppressMessages(emmeans(rg, ~ season | status, weights = "proportional"))
+  emm_season <- suppressMessages(emmeans(emm_season, ~ season, weights = "equal"))
+  
+  # STATUS WITHIN SEASON (takes into account seasonally variable vegpresence)
+  emm_ss <- suppressMessages(emmeans(rg, ~ status | season, weights = "proportional"))
+  
+  # STATUS WITHIN VEGPRESENCE (gives equal weight to all seasons to look at the overall annual effect)
+  emm_sv <- suppressMessages(emmeans(rg, ~ status | vegpresence, weights = "equal"))
+  
+  return(list(
+    status = emm_status,
+    season = emm_season,
+    inseason_status = emm_ss,
+    inveg_status = emm_sv
+  ))
 }
 
-
-
-#Simple models (ok)-------
-
-#Only applicable to RI
-
-#Emmeans are extracted, pairwise tests done (based on model distribution
-#family), CLDs are assigned to significantly different groups (and re-ordered
-#based on emmean ranking). WE save both pairwise post-hoc tests in original
-#(model scale) and back-transformed scales; AND emmeanCLDs in original and
-#back-transformed scales.
-
-#Equal Weights used for all EMMs: this assumes that all seasons and all status
-#have the same weight for each other (appropriate).
-
-
-#Initialize simple model results list
-simple_comparison_list<- list()
-
-# Loop to extract all emmeans and perform pairwise tests for appropriate
-# comparisons for every casepilot*ghg simple model.
-
-for (dataset in names(simplemodel_list_allghg)) {
-  #get model
-  cp_model <- simplemodel_list_allghg[[dataset]]
-  #get transformation object
-  cp_trans_obj<- bn_list[[dataset]]
+#Function to extract only relevant parameters from emmeans objects: 
+extract_emm_df <- function(emm_list, gas_label) {
   
-  #extract casepilot name and ghgspecies from model-list names
-  casepilot_name<- sub("_.*", "", dataset)
-  ghgspecies<- sub(paste0(casepilot_name,"_"),"",dataset)
-  
-  # Obtain emmean object for each comparison: status, season,
-  # status_within_season. Using custom function for consistency.
-  status_emmeans <- custom_weighted_emmeans_backtrans(
-    model_object = cp_model, trans_object = cp_trans_obj,
-    grouping_vars = c("status"),
-    custom_weights = F)%>% 
-    mutate(comparison = "status",
-           ghgspecies = ghgspecies,
-           casepilot = casepilot_name,
-           season = NA)
-  
-  season_emmeans <- custom_weighted_emmeans_backtrans(
-    model_object = cp_model, trans_object = cp_trans_obj,
-    grouping_vars = c("season"),
-    custom_weights = F)%>% 
-    mutate(comparison = "season",
-           ghgspecies = ghgspecies,
-           casepilot = casepilot_name,
-           status = NA)
-  
-  statuswithinseason_emmeans <- custom_weighted_emmeans_backtrans(
-    model_object = cp_model, trans_object = cp_trans_obj,
-    grouping_vars = c("status","season"),
-    custom_weights = F) %>%
-    mutate(comparison = "status_within_season",
-           ghgspecies = ghgspecies,
-           casepilot = casepilot_name)
-  
-  
-  #Calculate contrasts for each comparison and add identifying columns:   
-  #Status comparison:
-  status_contrasts <- custom_pairwise_contrasts_fullvcov(
-    model_object = cp_model, trans_object = cp_trans_obj,
-    compare_var = "status",
-    use_custom_weights = FALSE)%>% 
-    mutate(comparison = "status",
-           ghgspecies = ghgspecies,
-           casepilot = casepilot_name,
-           season= NA)
-  
-  season_contrasts <- custom_pairwise_contrasts_fullvcov(
-    model_object = cp_model, trans_object = cp_trans_obj,
-    compare_var = "season",
-    use_custom_weights = FALSE)%>% 
-    mutate(comparison = "season",
-           ghgspecies = ghgspecies,
-           casepilot = casepilot_name,
-           status= NA)
-  
-  statuswithinseason_contrasts <- custom_pairwise_contrasts_fullvcov(
-    model_object = cp_model, trans_object = cp_trans_obj,
-    compare_var = "status",group_vars = "season",
-    use_custom_weights = FALSE)%>% 
-    mutate(comparison = "status_within_season",
-           ghgspecies = ghgspecies,
-           casepilot = casepilot_name)
-  
-  
-  #Join all emmeans and all contrasts:
-  all_emmeans<- status_emmeans %>%
-    full_join(season_emmeans) %>%
-    full_join(statuswithinseason_emmeans)
-  
-  all_contrasts<- status_contrasts %>%
-    full_join(season_contrasts) %>%
-    full_join(statuswithinseason_contrasts)
-  
-  #Store in named list: 
-  simple_comparison_list[[dataset]] <- list(
-    emmeans_og = all_emmeans,
-    posthoc_comparisons = all_contrasts)
-  
-}
-
-
-#Remove within-loop objects
-rm(all_contrasts,all_emmeans, cp_model,cp_trans_obj, casepilot_name, ghgspecies,
-   status_emmeans, season_emmeans, statuswithinseason_emmeans,
-   status_contrasts,season_contrasts,statuswithinseason_contrasts)
-
-
-#Get pairwise posthoc tests (in model scale): 
-#T-test or Z-test depending on model distribution family used (automatically
-#assigned by contrasts (method="pairwise)). p.value is was adjusted for multiple
-#comparisons sidak
-simplemodel_posthoc_tests <- purrr::map_dfr(simple_comparison_list, "posthoc_comparisons") %>%
-  #Identify the model_distribution based on df estimation:
-  mutate(model_distribution=if_else(df==Inf, "t_family", "gaussian")) %>% 
-  dplyr::select(casepilot, ghgspecies, model_distribution,comparison, test_used, contrast, season,
-                estimate_og, SE_og, lower.CL_og, upper.CL_og,
-                estimate_bt, SE_bt, lower.CL_bt, upper.CL_bt,
-                df, stat.ratio, p.value)
-
-#Save pairwise posthoc tests as csv.
-#Save post-hoc comparisons in model scale and back-transformed (to go to supplementary table)
-write.csv(x = simplemodel_posthoc_tests, file = paste0(path_2_modeloutputs,"Posthoctests_RI_chambermodels.csv"),row.names = F)
-
-
-#Obtain CLDs (letter-groups) based on post-hoc tests for every comparison:
-CLD_letters <- simplemodel_posthoc_tests %>%
-  #leave only (1) variables that identify unique comparisons, (2)contrast column, (3) pvalue column
-  #season is kept to account for status_within_season comparison. 
-  dplyr::select(casepilot, ghgspecies, comparison, season, contrast, p.value) %>% 
-  #Group by comparison identifiers
-  group_by(casepilot, ghgspecies, comparison, season) %>%
-  #Remove any spaces from contrast column (mutcompLetters expects levels to be only separated by a hyphen "-")
-  mutate(contrast=gsub(" ","", contrast)) %>% 
-  #Nest data for each group
-  nest() %>%
-  # Step 3: Apply multcompLetters to each group
-  mutate(letters = purrr::map(data, function(group_df) {
-    # Extract levels and p-values 
-    contrast_matrix <- group_df %>%
-      dplyr::select(contrast, p.value) %>%
-      deframe()
+  do.call(rbind, lapply(names(emm_list), function(term_name) {
     
-    # Apply multcompLetters
-    multcompLetters(contrast_matrix)$Letters %>%
-      enframe(name = "level", value = "cld_group")
-  })) %>%
-  # Step 4: Unnest results
-  dplyr::select(-data) %>%
-  unnest(letters) %>% 
-  #Reformat level to fit the appropriate columns: season or status
-  mutate(season=if_else(level%in%c("S1","S2","S3","S4"),level,season),
-         status=if_else(level%in%c("Altered","Preserved","Restored"),level, NA),
-         #Mantain level to identify nested comparisons 
-         seasonlevel=if_else(comparison=="status_within_season", season, NA)) %>% 
-  dplyr::select(casepilot, ghgspecies, comparison,status,season,seasonlevel, cld_group)
+    df <- as.data.frame(emm_list[[term_name]])
+    
+    df$term <- term_name
+    df$ghgspecies <- gas_label
+    
+    df
+  }))
+}
 
 
-#Get emmeans (in model scale) from loop list 
-simplemodel_emmeans<- purrr::map_dfr(simple_comparison_list, "emmeans_og")
+#DEFINE function to bootstrap (parametric bootstraping paried for co2 and ch4)
+one_boot <- function(df_case, model_pair, model_type, weights_df = NULL, max_tries = 50) {
+  
+  # helper: safe model fit capturing warnings
+  safe_fit <- function(expr) {
+    
+    warn <- NULL
+    
+    result <- withCallingHandlers(
+      tryCatch(expr, error = function(e) return(NULL)),
+      warning = function(w) {
+        warn <<- c(warn, conditionMessage(w))
+        invokeRestart("muffleWarning")
+      }
+    )
+    
+    list(model = result, warnings = warn)
+  }
+  
+  for (i in 1:max_tries) {
+    
+    # --- 1. SPLIT ORIGINAL DATA (STRUCTURE PRESERVED) ---
+    df_co2 <- df_case[df_case$ghgspecies == "co2", ]
+    df_ch4 <- df_case[df_case$ghgspecies == "ch4", ]
+    
+    
+    # --- 2. PARAMETRIC SIMULATION ---
+    y_co2_sim <- tryCatch(simulate(model_pair[[1]])[[1]], error = function(e) NULL)
+    y_ch4_sim <- tryCatch(simulate(model_pair[[2]])[[1]], error = function(e) NULL)
+    
+    if (is.null(y_co2_sim) || is.null(y_ch4_sim)) next
+    
+    
+    # attach simulated responses (pairing preserved automatically)
+    df_co2_sim <- df_co2
+    df_ch4_sim <- df_ch4
+    
+    df_co2_sim$dailyflux_trans <- y_co2_sim
+    df_ch4_sim$dailyflux_trans <- y_ch4_sim
+    
+    
+    # --- 3. REFIT MODELS ---
+    fit_co2 <- safe_fit(update(model_pair[[1]], data = df_co2_sim))
+    fit_ch4 <- safe_fit(update(model_pair[[2]], data = df_ch4_sim))
+    
+    mod_co2 <- fit_co2$model
+    mod_ch4 <- fit_ch4$model
+    
+    if (is.null(mod_co2) || is.null(mod_ch4)) next
+    
+    
+    # --- 4. FILTER BAD FITS ---
+    bad_warn_patterns <- c("rank-deficient", "convergence", "Hessian", "non-positive-definite")
+    
+    if (any(grepl(paste(bad_warn_patterns, collapse = "|"), fit_co2$warnings))) next
+    if (any(grepl(paste(bad_warn_patterns, collapse = "|"), fit_ch4$warnings))) next
+    
+    
+    # --- 5. COMPUTE EMMs ---
+    emm_co2 <- tryCatch({
+      if (model_type == "simple") {
+        compute_emm_simple(mod_co2)
+      } else {
+        compute_emm_complex(mod_co2, weights_df)
+      }
+    }, error = function(e) return(NULL))
+    
+    emm_ch4 <- tryCatch({
+      if (model_type == "simple") {
+        compute_emm_simple(mod_ch4)
+      } else {
+        compute_emm_complex(mod_ch4, weights_df)
+      }
+    }, error = function(e) return(NULL))
+    
+    if (is.null(emm_co2) || is.null(emm_ch4)) next
+    
+    
+    # --- 6. EXTRACT OUTPUT ---
+    df_co2_emm <- extract_emm_df(emm_co2, "co2")
+    df_ch4_emm <- extract_emm_df(emm_ch4, "ch4")
+    
+    df_out <- rbind(df_co2_emm, df_ch4_emm)
+    
+    df_out <- df_out %>%
+      dplyr::select(any_of(c("ghgspecies","term","status","season","vegpresence","emmean")))
+    
+    
+    # --- 7. RETURN SUCCESS ---
+    return(df_out)
+  }
+  
+  # --- FAILED ---
+  return(NULL)
+}
 
-#Add CLD and back transform emmeans
-simplemodel_emmeansCLD <- simplemodel_emmeans %>%
-  #ADD CLD group-letters (re-coding them so that "a" always identifies the
-  #significant group with lowest emmean, b the next lowest emmean, and so on...)
-  left_join(CLD_letters, by = c("status", "comparison", "ghgspecies", "casepilot", "season")) %>%
-  #Separate each comparison group to do the letter re-coding
-  group_split(casepilot, ghgspecies, comparison, seasonlevel) %>%
-  map_dfr(function(group_df) {
-    # Step 1: Order by emmean
-    group_df <- group_df %>% arrange(emmean_og)
-    # Step 2: Extract and map letters
-    letter_list <- str_split(group_df$cld_group, "")
-    unique_letters <- unique(unlist(letter_list))
-    new_letters <- letters[seq_along(unique_letters)]
-    letter_map <- setNames(new_letters, unique_letters)
-    # Step 3: Apply mapping
-    group_df <- group_df %>%
-      mutate(cld_group = map_chr(letter_list, ~ paste0(letter_map[.x], collapse = "")))
-    return(group_df)
-  }) %>% 
-  #remove grouping season variable
-  dplyr::select(-seasonlevel) %>% 
-  mutate(weights_used="equal") %>% #add weights info for all (all equal)
-  #Format final emmean_CLD: select columns
-  dplyr::select(casepilot, ghgspecies, comparison, status, season,
-                df, weights_used,
-                emmean_og, SE_og,lower.CL_og, upper.CL_og,
-                cld_group,
-                emmean_bt, SE_bt, lower.CL_bt, upper.CL_bt) %>% 
-  #Format final emmean_CLD: arrange values
-  arrange(casepilot,ghgspecies, comparison, season,status )
 
-#Save emmeans and groupletters (back-transformed):  
-write.csv(x = simplemodel_emmeansCLD, file = paste0(path_2_modeloutputs,"EmmeansCLD_RI_chambermodels.csv"),row.names = F)
+#Bootstrap one casepilot:
+run_boot_case <- function(df, case, model_pair, model_type,
+                          B = 1000, weights_df = NULL) {
+  
+  df_case <- df[df$casepilot == case, ]
+  
+  with_progress({
+    
+    p <- progressor(steps = B)
+    
+    results <- future_lapply(seq_len(B), function(b) {
+      
+      res <- tryCatch({
+        
+        out <- one_boot(
+          df_case = df_case,
+          model_pair = model_pair,
+          model_type = model_type,
+          weights_df = weights_df
+        )
+        
+        # assign correct bootstrap iteration
+        if (!is.null(out)) {
+          out$iteration <- b
+        }
+        
+        out
+        
+      }, error = function(e) {
+        return(NULL)
+      })
+      
+      p(sprintf("case %s - iter %d", case, b))
+      
+      return(res)
+      
+    }, 
+    future.seed = TRUE,
+    future.packages = c("glmmTMB", "emmeans", "dplyr")
+    )
+    
+  })
+  
+  # Remove failed iterations
+  results <- Filter(Negate(is.null), results)
+  
+  return(results)
+}
+
+
+#3.1. Simplemodels-----
+
+#ACTUAL CALCULATION FOR SIMPLEMODELS
+simple_pairs <- pair_models(simplemodel_list_allghg)
+
+boot_simple <- list()
+
+for (case in names(simple_pairs)) {
+  
+  cat("\nRunning SIMPLE bootstrap for case:", case, "\n")
+  
+  boot_simple[[case]] <- run_boot_case(
+    df = data4models,
+    case = case,
+    model_pair = simple_pairs[[case]],
+    model_type = "simple",
+    B = Nboot #Bootstrap N
+  )
+}
 
 
 
 
-
-#Complex models (ok)------
-
+#3.2. Complexmodels-----
 #We need to take into account the proportion of vegpresence in the field to
 #estimate the status, season and status_within_season emmeans. For
 #status_within_vegpresence, equal weights should be applied (to give equal
@@ -3336,239 +2568,592 @@ write.csv(x = simplemodel_emmeansCLD, file = paste0(path_2_modeloutputs,"Emmeans
 #seasons does not influence the importance of each season in the status emmean
 #(all season treated equally).
 {
-casepilot_weights<- data4models %>% 
-  dplyr::select(plotcode, casepilot, season, status, vegpresence, subsite) %>% 
-  #remove duplicates (same plotcode, different ghgspecies)
-  distinct() %>% 
-  dplyr::group_by(casepilot, season, status, vegpresence, subsite) %>%
-  #Calculate vegpresence deployment counts for each (subsite) sampling and pivot_wider
-  summarise(n_vegpresence=sum(!is.na(vegpresence)), .groups = "drop") %>% 
-  pivot_wider(names_from = vegpresence, values_from = n_vegpresence,values_fill = 0) %>% 
-  #Calculate vegpresence proportion for every (subsite) sampling.
-  mutate(sum_all=`Non-vegetated`+Vegetated) %>% 
-  mutate(Vegetated=Vegetated/sum_all,
-         `Non-vegetated`=`Non-vegetated`/sum_all) %>% 
-  dplyr::select(-sum_all) %>% 
-  pivot_longer(cols = c(`Non-vegetated`,Vegetated), names_to = "vegpresence", values_to = "proportions") %>% 
-  #Calculate the average of each status (giving equal weight to the two subsites)
-  dplyr::group_by(casepilot, status, season, vegpresence) %>% 
-  summarise(prop_weight=mean(proportions, na.rm = T), .groups = "drop")
+  casepilot_weights<- data4models %>% 
+    dplyr::select(plotcode, casepilot, season, status, vegpresence, subsite) %>% 
+    #remove duplicates (same plotcode, different ghgspecies)
+    distinct() %>% 
+    dplyr::group_by(casepilot, season, status, vegpresence, subsite) %>%
+    #Calculate vegpresence deployment counts for each (subsite) sampling and pivot_wider
+    summarise(n_vegpresence=sum(!is.na(vegpresence)), .groups = "drop") %>% 
+    pivot_wider(names_from = vegpresence, values_from = n_vegpresence,values_fill = 0) %>% 
+    #Calculate vegpresence proportion for every (subsite) sampling.
+    mutate(sum_all=`Non-vegetated`+Vegetated) %>% 
+    mutate(Vegetated=Vegetated/sum_all,
+           `Non-vegetated`=`Non-vegetated`/sum_all) %>% 
+    dplyr::select(-sum_all) %>% 
+    pivot_longer(cols = c(`Non-vegetated`,Vegetated), names_to = "vegpresence", values_to = "proportions") %>% 
+    #Calculate the average of each status (giving equal weight to the two subsites)
+    dplyr::group_by(casepilot, status, season, vegpresence) %>% 
+    summarise(prop_weight=mean(proportions, na.rm = T), .groups = "drop")
+  
+  #For CURONIAN: Calculate overall veg/noveg of curonian, across status and
+  #seasons. No seasonal variability was observed in vegetation extent,
+  #additionally due to initial incorrect restored site boundaries, the proportions
+  #of vegpresence in these sites are not representative of actual site
+  #composition. We use constant average proportion across all status and seasons.
+  cu_weights<- data4models %>% 
+    filter(casepilot=="CU") %>% 
+    group_by(plotcode, casepilot,vegpresence) %>% 
+    distinct() %>% #to remove duplicates (same plotcode, different ghgspecies)
+    group_by(casepilot, vegpresence) %>% 
+    #calculate overall vegpresence counts (across all seasons and all subsites)
+    summarise(n_vegpresence=sum(!is.na(vegpresence)), .groups = "drop") %>% 
+    pivot_wider(names_from = vegpresence, values_from = n_vegpresence,values_fill = 0) %>% 
+    #Calculate vegpresence proportion 
+    mutate(sum_all=`Non-vegetated`+Vegetated) %>% 
+    mutate(Vegetated=Vegetated/sum_all,
+           `Non-vegetated`=`Non-vegetated`/sum_all) %>% 
+    dplyr::select(-sum_all)
+  
+  #Override CU composition: constant actual composition, differences in chamber
+  #deployment are due to systematic sampling biass in Restored sites
+  casepilot_weights<-casepilot_weights %>% 
+    mutate(prop_weight=if_else(casepilot=="CU"&vegpresence=="Vegetated", cu_weights %>% pull(`Vegetated`),prop_weight),
+           prop_weight=if_else(casepilot=="CU"&vegpresence=="Non-vegetated",cu_weights %>% pull(`Non-vegetated`),prop_weight))
+}
 
-#For CURONIAN: Calculate overall veg/noveg of curonian, across status and
-#seasons. No seasonal variability was observed in vegetation extent,
-#additionally due to initial incorrect restored site boundaries, the proportions
-#of vegpresence in these sites are not representative of actual site
-#composition. We use constant average proportion across all status and seasons.
-cu_weights<- data4models %>% 
-  filter(casepilot=="CU") %>% 
-  group_by(plotcode, casepilot,vegpresence) %>% 
-  distinct() %>% #to remove duplicates (same plotcode, different ghgspecies)
-  group_by(casepilot, vegpresence) %>% 
-  #calculate overall vegpresence counts (across all seasons and all subsites)
-  summarise(n_vegpresence=sum(!is.na(vegpresence)), .groups = "drop") %>% 
-  pivot_wider(names_from = vegpresence, values_from = n_vegpresence,values_fill = 0) %>% 
-  #Calculate vegpresence proportion 
-  mutate(sum_all=`Non-vegetated`+Vegetated) %>% 
-  mutate(Vegetated=Vegetated/sum_all,
-         `Non-vegetated`=`Non-vegetated`/sum_all) %>% 
-  dplyr::select(-sum_all)
+#Build a list of weights to be called inside the loop (based on casepilot model name)
+weights_list<- split(casepilot_weights, casepilot_weights$casepilot)
 
-#Override CU composition: constant actual composition, differences in chamber
-#deployment are due to systematic sampling biass in Restored sites
-casepilot_weights<-casepilot_weights %>% 
-  mutate(prop_weight=if_else(casepilot=="CU"&vegpresence=="Vegetated", cu_weights %>% pull(`Vegetated`),prop_weight),
-         prop_weight=if_else(casepilot=="CU"&vegpresence=="Non-vegetated",cu_weights %>% pull(`Non-vegetated`),prop_weight))
+
+
+##Boot emmeans-----
+complex_pairs <- pair_models(complexmodel_list_allghg)
+
+boot_complex <- list()
+
+for (case in names(complex_pairs)) {
+  
+  cat("\nRunning COMPLEX bootstrap for case:", case, "\n")
+  
+  boot_complex[[case]] <- run_boot_case(
+    df = data4models,
+    case = case,
+    model_pair = complex_pairs[[case]],
+    model_type = "complex",
+    B = Nboot,
+    weights_df = weights_list[[case]]
+  )
+}
+
+# boot_simple and boot_complex are nested lists storing bootstrap results by casepilot. 
+# The first level contains casepilot names (e.g., "RI", "CA", "DA"), and each case contains a list of bootstrap iterations. 
+# Each iteration is a data frame where rows correspond to estimated marginal means (EMMs) for a given gas (co2/ch4), term (e.g., "status", "season", "inseason_status", and additionally "inveg_status" for complex models), and factor levels (status, season, and vegpresence when applicable). 
+# The columns store the identifiers (ghgspecies, term, status, season, iteration) and the model-scale estimate (emmean). 
+# Together, these lists represent the distribution of EMMs across bootstrap samples, preserving pairing between CO2 and CH4 within each iteration for downstream contrasts, back-transformation, and CO2eq calculations.
+
+
+
+#4. CONTRASTS AND P-values-----
+
+# For each casepilot:
+  
+# Model-scale contrasts + empirical p-values
+# Back-transform EMMs
+# Summarise EMMs (original scale)
+# Compute contrasts on back-transformed scale + summaries
+
+#to combine boot_simple and boot_complex lists into single data-frames on which to perform the calculations.
+combine_boot <- function(boot_list) {
+  
+  map2_df(
+    boot_list,
+    names(boot_list),
+    ~ bind_rows(.x) %>%
+      mutate(casepilot = .y)
+  )
+}
+
+boot_simple_df  <- combine_boot(boot_simple)
+boot_complex_df <- combine_boot(boot_complex)
+
+
+#1. CONTRASTS (MODEL SCALE + empirical p-values)
+
+#helper: pairwise contrasts (optionally grouped, value can be direct "emmean" or "bt_emmean" for convenience)
+compute_pairwise <- function(df, value_col = "emmean",
+                             group_vars = NULL,
+                             level_var = "status") {
+  
+  df %>%
+    group_by(across(all_of(c("casepilot", "iteration", "ghgspecies", group_vars)))) %>%
+    summarise(
+      contrast_df = list({
+        
+        levs <- unique(.data[[level_var]])
+        vals <- .data[[value_col]]
+        
+        combs <- combn(levs, 2, simplify = FALSE)
+        
+        do.call(rbind, lapply(combs, function(cmb) {
+          
+          i1 <- which(levs == cmb[1])
+          i2 <- which(levs == cmb[2])
+          
+          data.frame(
+            contrast = paste(cmb[1], "-", cmb[2]),
+            diff = vals[i1] - vals[i2]
+          )
+        }))
+        
+      }),
+      .groups = "drop"
+    ) %>%
+    tidyr::unnest(contrast_df)
+}
+
+#helper: empirical p-value
+p_empirical <- function(x) {
+  2 * min(mean(x >= 0), mean(x <= 0))
+}
+
+#summarise contrasts (optional pvalue)
+summarise_contrasts <- function(df, compute_p = TRUE) {
+  
+  # Step 1: summarise per contrast
+  df_sum <- df %>%
+    group_by(across(any_of(c("casepilot", "ghgspecies", "contrast",
+                             "season", "vegpresence")))) %>%
+    summarise(
+      mean = mean(diff, na.rm = TRUE),
+      se   = sd(diff, na.rm = TRUE),
+      lwr  = quantile(diff, 0.025, na.rm = TRUE),
+      upr  = quantile(diff, 0.975, na.rm = TRUE),
+      n_boot = sum(!is.na(diff)),
+      p    = if (compute_p) p_empirical(diff) else NA_real_,
+      .groups = "drop"
+    )
+  
+  # Step 2: apply Holm correction across ALL contrasts
+  # within each casepilot × ghgspecies combination
+  df_sum <- df_sum %>%
+    group_by(across(any_of(c("casepilot", "ghgspecies")))) %>%
+    mutate(
+      p_adj = if (compute_p) p.adjust(p, method = "holm") else NA_real_
+    ) %>%
+    ungroup()
+  
+  return(df_sum)
 }
 
 
-##Weighted-emmean-loop------
+#Function to summarise emmean distribution (or emmean_bt), 
+summarise_emm <- function(df, value_col = "emmean") {
 
-#Calculate emmeans for each relevant comparison, using weights when appropriate:
-
-#Intialize list for complex models
-complex_comparison_list<- list()
-
-# Loop to extract all emmeans and perform pairwise tests for appropriate
-# comparisons for every casepilot complexbestmodel.
-for (dataset in names(complexmodel_list_allghg)) {
-  #get model
-  cp_model <- complexmodel_list_allghg[[dataset]]
-  #get transformation object
-  cp_trans_obj<- bn_list[[dataset]]
-  
-  #extract casepilot name and ghgspecies from model-list names
-  casepilot_name<- sub("_.*", "", dataset)
-  ghgspecies<- sub(paste0(casepilot_name,"_"),"",dataset)
-  
-  #Prepare casepilot custom weights: 
-  weight_df<- casepilot_weights %>% filter(casepilot==casepilot_name) %>% dplyr::select(-casepilot)
-  
-  #Obtain weighted emmeans for comparisons: status, season, status_within_season
-  #Obtain equal-weighted emmeans for comparison: status_within_vegpresence
-  status_emmeans <- custom_weighted_emmeans_backtrans(
-    model_object = cp_model, trans_object = cp_trans_obj,
-    grouping_vars = c("status"),
-    custom_weights = T, custom_weight_df = weight_df) %>% 
-    mutate(comparison = "status",
-           ghgspecies = ghgspecies,
-           casepilot = casepilot_name,
-           season = NA, vegpresence = NA, weights_used = "custom")
-  
-  season_emmeans <- custom_weighted_emmeans_backtrans(
-    model_object = cp_model, trans_object = cp_trans_obj,
-    grouping_vars = c("season"),
-    custom_weights = T, custom_weight_df = weight_df) %>% 
-    mutate(comparison = "season",
-           ghgspecies = ghgspecies,
-           casepilot = casepilot_name,
-           status = NA, vegpresence = NA, weights_used = "custom")
-  
-  statuswithinseason_emmeans <- custom_weighted_emmeans_backtrans(
-    model_object = cp_model, trans_object = cp_trans_obj,
-    grouping_vars = c("status","season"),
-    custom_weights = T, custom_weight_df = weight_df) %>%
-    mutate(comparison = "status_within_season",
-           ghgspecies = ghgspecies,
-           casepilot = casepilot_name, 
-           vegpresence = NA, weights_used = "custom")
-  
-  statuswithinvegpresence_emmeans <- custom_weighted_emmeans_backtrans(
-    model_object = cp_model, trans_object = cp_trans_obj,
-    grouping_vars = c("status","vegpresence"),
-    custom_weights = F) %>% #Using equal weights (same importance to all seasons)
-    mutate(comparison = "status_within_vegpresence",
-           ghgspecies = ghgspecies,
-           casepilot = casepilot_name, 
-           season = NA, weights_used = "equal")
-  
-  #Calculate contrasts for each comparison and add identifying columns:   
-  #Status comparison:
-  status_contrasts <- custom_pairwise_contrasts_fullvcov(
-    model_object = cp_model, trans_object = cp_trans_obj,
-    compare_var = "status",
-    use_custom_weights = T, custom_weight_df = weight_df)%>% 
-    mutate(comparison = "status",
-           ghgspecies = ghgspecies,
-           casepilot = casepilot_name,
-           season = NA, vegpresence = NA, weights_used = "custom")
-  
-  season_contrasts <- custom_pairwise_contrasts_fullvcov(
-    model_object = cp_model, trans_object = cp_trans_obj,
-    compare_var = "season",
-    use_custom_weights = T, custom_weight_df = weight_df)%>% 
-    mutate(comparison = "season",
-           ghgspecies = ghgspecies,
-           casepilot = casepilot_name,
-           vegpresence = NA, weights_used = "custom")
-  
-  statuswithinseason_contrasts <- custom_pairwise_contrasts_fullvcov(
-    model_object = cp_model, trans_object = cp_trans_obj,
-    compare_var = "status", group_vars = "season",
-    use_custom_weights = T, custom_weight_df = weight_df)%>%
-    mutate(comparison = "status_within_season",
-           ghgspecies = ghgspecies,
-           casepilot = casepilot_name, 
-           vegpresence = NA, weights_used = "custom")
-  
-  statuswithinvegpresence_contrasts <- custom_pairwise_contrasts_fullvcov(
-    model_object = cp_model, trans_object = cp_trans_obj,
-    compare_var = "status", group_vars = "vegpresence",
-    use_custom_weights = F)%>%#Using equal weights (same importance to all seasons)
-    mutate(comparison = "status_within_vegpresence",
-           ghgspecies = ghgspecies,
-           casepilot = casepilot_name, 
-           season = NA, weights_used = "equal")
-  
-  #Join all emmeans and all contrasts:
-  all_emmeans<- status_emmeans %>%
-    full_join(season_emmeans) %>%
-    full_join(statuswithinseason_emmeans) %>% 
-    full_join(statuswithinvegpresence_emmeans)
-  
-  all_contrasts<- status_contrasts %>%
-    full_join(season_contrasts) %>%
-    full_join(statuswithinseason_contrasts) %>% 
-    full_join(statuswithinvegpresence_contrasts)
-  
-  #Store in named list: 
-  complex_comparison_list[[dataset]] <- list(
-    emmeans_og = all_emmeans,
-    posthoc_comparisons = all_contrasts)
-  
+df %>%
+  group_by(across(any_of(c("casepilot", "ghgspecies", "term",
+                           "status", "season", "vegpresence")))) %>%
+  summarise(
+    mean = mean(.data[[value_col]], na.rm = TRUE),
+    se   = sd(.data[[value_col]], na.rm = TRUE),
+    lwr  = quantile(.data[[value_col]], 0.025, na.rm = TRUE),
+    upr  = quantile(.data[[value_col]], 0.975, na.rm = TRUE),
+    n_boot = sum(!is.na(.data[[value_col]])),
+    .groups = "drop"
+  )
 }
 
-#Remove within-loop objects
-rm(all_contrasts,all_emmeans, cp_model, cp_trans_obj, casepilot_name, ghgspecies,weight_df,
-   status_emmeans, season_emmeans, statuswithinseason_emmeans,statuswithinvegpresence_emmeans,
-   status_contrasts,season_contrasts,statuswithinseason_contrasts,statuswithinvegpresence_contrasts)
+#Function to back transform emmeans distribution objects: boot_complex_df and boot_simple_df
+backtransform_emmeans <- function(x, bn_obj) {
+  predict(bn_obj, newdata = x, inverse = TRUE)
+}
+
+#4.1. Simplemodels -----
+
+##A) model-scale cotrasts&pvalue-----
+# STATUS
+contr_status_RI_modscale <- boot_simple_df %>%
+  filter(term == "status") %>%
+  compute_pairwise(value_col = "emmean",group_vars = NULL, level_var = "status") %>% 
+  summarise_contrasts(compute_p = T)
+
+# SEASON
+contr_season_RI_modscale <- boot_simple_df %>%
+  filter(term == "season") %>%
+  compute_pairwise(value_col = "emmean",group_vars = NULL, level_var = "season") %>% 
+  summarise_contrasts(compute_p = T)
+
+# STATUS WITHIN SEASON
+contr_ss_RI_modscale <- boot_simple_df %>%
+  filter(term == "inseason_status") %>%
+  compute_pairwise(value_col = "emmean",group_vars = "season", level_var = "status") %>% 
+  summarise_contrasts(compute_p = T)
+
+##B) Bt_emmeans and Bt_contrasts------
+
+#Back-transform emmeans
+bt_boot_simple_df <- boot_simple_df %>%
+  rowwise() %>%
+  mutate(
+    emmean_bt = {
+      key <- paste0(unique(casepilot), "_", ghgspecies)
+      backtransform_emmeans(emmean, bn_list[[key]])
+    }
+  ) %>%
+  ungroup()
+
+#Save back-transformed emmeans distributions (just in case): 
+write.csv(bt_boot_simple_df,  file = paste0(path_2_modeloutputs,"bt_boot_simple_df.csv"),  row.names = FALSE)
+
+#Back-transformed emmeans summary:
+bt_sum_emmean_RI<- summarise_emm(bt_boot_simple_df,value_col = "emmean_bt")
 
 
-#Get pairwise posthoc tests (in model scale and back-transformed): 
-#T-test or Z-test depending on model distribution family used (automatically
-#assigned by contrasts (method="pairwise)). p.value is adjusted for multiple
-#comparisons sidak
-complexmodel_customweight_posthoc_tests <- purrr::map_dfr(complex_comparison_list, "posthoc_comparisons") %>%
-  #Identify the test used (and model_distribution) based on df estimation:
-  mutate(model_distribution=if_else(df==Inf, "t_family", "gaussian")) %>% 
-  dplyr::select(casepilot, ghgspecies, model_distribution, comparison, test_used, 
-                contrast,season, vegpresence, 
-                estimate_og, SE_og, lower.CL_og, upper.CL_og, 
-                estimate_bt, SE_bt, lower.CL_bt, upper.CL_bt, 
-                df, stat.ratio, p.value)
+#Calculate bt_scale contrasts (for tables in paper), add pvalue from model-scale test
+# STATUS
+bt_contr_status_RI<- bt_boot_simple_df %>%
+  filter(term == "status") %>%
+  compute_pairwise(value_col = "emmean_bt",group_vars = NULL, level_var = "status") %>% 
+  summarise_contrasts(compute_p = F)  %>% dplyr::select(-c(p,p_adj)) %>% 
+  left_join(contr_status_RI_modscale %>% dplyr::select(-c(mean, se, lwr,upr,n_boot))) %>% 
+  mutate(comparison="status")
+
+# SEASON
+bt_contr_season_RI <- bt_boot_simple_df %>%
+  filter(term == "season") %>%
+  compute_pairwise(value_col = "emmean_bt",group_vars = NULL, level_var = "season") %>% 
+  summarise_contrasts(compute_p = F) %>% dplyr::select(-c(p,p_adj)) %>% 
+  left_join(contr_season_RI_modscale %>% dplyr::select(-c(mean, se, lwr,upr,n_boot)))%>% 
+  mutate(comparison="season")
+
+# STATUS WITHIN SEASON
+bt_contr_ss_RI <- bt_boot_simple_df %>%
+  filter(term == "inseason_status") %>%
+  compute_pairwise(value_col = "emmean",group_vars = "season", level_var = "status") %>% 
+  summarise_contrasts(compute_p = F) %>% dplyr::select(-c(p,p_adj)) %>% 
+  left_join(contr_ss_RI_modscale %>% dplyr::select(-c(mean, se, lwr,upr,n_boot)))%>% 
+  mutate(comparison="inseason_status")
+
+#Format and combine contrasts: 
+bt_contr_RI<- bind_rows(bt_contr_status_RI,bt_contr_season_RI,bt_contr_ss_RI) %>% 
+  dplyr::select(casepilot, ghgspecies, comparison, contrast, season, mean, se, lwr, upr, n_boot, p, p_adj)
 
 
-#Save pairwise posthoc tests as csv.
-#Save post-hoc comparisons in model scale (to go to supplementary table)
-write.csv(x = complexmodel_customweight_posthoc_tests, file = paste0(path_2_modeloutputs,"Posthoctests_rest_chambermodels.csv"),row.names = F)
 
+
+
+
+#4.2. Complexmodels -----
+
+##A) model-scale cotrasts&pvalue-----
+# STATUS
+contr_status_rest_modscale <- boot_complex_df %>%
+  filter(term == "status") %>%
+  compute_pairwise(value_col = "emmean",group_vars = NULL, level_var = "status") %>% 
+  summarise_contrasts(compute_p = T)
+
+# SEASON
+contr_season_rest_modscale <- boot_complex_df %>%
+  filter(term == "season") %>%
+  compute_pairwise(value_col = "emmean",group_vars = NULL, level_var = "season") %>% 
+  summarise_contrasts(compute_p = T)
+
+# STATUS WITHIN SEASON
+contr_ss_rest_modscale <- boot_complex_df %>%
+  filter(term == "inseason_status") %>%
+  compute_pairwise(value_col = "emmean",group_vars = "season", level_var = "status") %>% 
+  summarise_contrasts(compute_p = T)
+
+# STATUS WITHIN VEGPRESENCE
+contr_sv_rest_modscale <- boot_complex_df %>% 
+  filter(term == "inveg_status") %>%
+  compute_pairwise(value_col = "emmean",group_vars = "vegpresence", level_var = "status") %>% 
+  summarise_contrasts(compute_p = T)
+
+
+##B) Bt_emmeans and Bt_contrasts------
+
+#Back-transform emmeans
+bt_boot_complex_df <- boot_complex_df %>%
+  rowwise() %>%
+  mutate(
+    emmean_bt = {
+      key <- paste0(unique(casepilot), "_", ghgspecies)
+      backtransform_emmeans(emmean, bn_list[[key]])
+    }
+  ) %>%
+  ungroup()
+
+#Save back-transformed emmeans distributions (just in case): 
+write.csv(bt_boot_complex_df,  file = paste0(path_2_modeloutputs,"bt_boot_complex_df.csv"),  row.names = FALSE)
+
+
+#Back-transformed emmeans summary:
+bt_sum_emmean_rest<- summarise_emm(bt_boot_complex_df,value_col = "emmean_bt")
+
+
+#Calculate bt_scale contrasts (for tables in paper), add pvalue from model-scale test
+# STATUS
+bt_contr_status_rest<- bt_boot_complex_df %>%
+  filter(term == "status") %>%
+  compute_pairwise(value_col = "emmean_bt",group_vars = NULL, level_var = "status") %>% 
+  summarise_contrasts(compute_p = F)  %>% dplyr::select(-c(p,p_adj)) %>% 
+  left_join(contr_status_rest_modscale %>% dplyr::select(-c(mean, se, lwr,upr,n_boot))) %>% 
+  mutate(comparison="status")
+
+# SEASON
+bt_contr_season_rest <- bt_boot_complex_df %>%
+  filter(term == "season") %>%
+  compute_pairwise(value_col = "emmean_bt",group_vars = NULL, level_var = "season") %>% 
+  summarise_contrasts(compute_p = F) %>% dplyr::select(-c(p,p_adj)) %>% 
+  left_join(contr_season_rest_modscale %>% dplyr::select(-c(mean, se, lwr,upr,n_boot)))%>% 
+  mutate(comparison="season")
+
+# STATUS WITHIN SEASON
+bt_contr_ss_rest <- bt_boot_complex_df %>%
+  filter(term == "inseason_status") %>%
+  compute_pairwise(value_col = "emmean",group_vars = "season", level_var = "status") %>% 
+  summarise_contrasts(compute_p = F) %>% dplyr::select(-c(p,p_adj)) %>% 
+  left_join(contr_ss_rest_modscale %>% dplyr::select(-c(mean, se, lwr,upr,n_boot)))%>% 
+  mutate(comparison="inseason_status")
+
+# STATUS WITHIN VEGPRESENCE
+bt_contr_sv_rest <- bt_boot_complex_df %>%
+  filter(term == "inveg_status") %>%
+  compute_pairwise(value_col = "emmean",group_vars = "vegpresence", level_var = "status") %>% 
+  summarise_contrasts(compute_p = F) %>% dplyr::select(-c(p,p_adj)) %>% 
+  left_join(contr_sv_rest_modscale %>% dplyr::select(-c(mean, se, lwr,upr,n_boot)))%>% 
+  mutate(comparison="inveg_status")
+
+#Format and combine contrasts: 
+bt_contr_rest<- bind_rows(bt_contr_status_rest,bt_contr_season_rest,bt_contr_ss_rest,bt_contr_sv_rest) %>% 
+  dplyr::select(casepilot, ghgspecies, comparison, contrast, season,vegpresence, mean, se, lwr, upr,n_boot,p,p_adj)
+
+
+
+#4.3. CO2eq calc-----
+#We now calulate the CO2eq metric (gwp100, gwp20) from the paired bootstrapped emmeans.
+#we need: 
+  #1. Emmeans summary
+  #2. Contrast summary (with pvalue, all from real-scale)
+
+#GWP factors for ch4:
+gwp100factor<- 27
+gwp20factor<- 79.7
+
+#Co2 is in mol per m2 per day: use (co2*44.0095)  to transform to g per m2 per day
+#ch4 is in mmol per m2 per day: use (ch4*1e-3*16.04246) to transform to g per m2 per day
+
+
+##A) BUILD CO2eq DATASET (from bt scale) ----
+#FOR simplemodels:
+
+# reshape to wide to combine gases
+bt_simple_wide <- bt_boot_simple_df %>%
+  dplyr::select(casepilot, iteration, term, status, season, ghgspecies, emmean_bt) %>%
+  tidyr::pivot_wider(names_from = ghgspecies, values_from = emmean_bt)
+
+# compute CO2eq
+gwp_simple_df <- bt_simple_wide %>%
+  mutate(
+    gwp100 = (co2*44.0095) + ((ch4*1e-3*16.04246) * gwp100factor),
+    gwp20  =  (co2*44.0095) + ((ch4*1e-3*16.04246) * gwp20factor)
+  ) %>%
+  tidyr::pivot_longer(
+    cols = c(gwp100, gwp20),
+    names_to = "ghgspecies",
+    values_to = "emmean_bt"
+  )
+
+#Save back-transformed emmeans distributions (just in case): 
+write.csv(gwp_simple_df,  file = paste0(path_2_modeloutputs,"gwp_simple_df.csv"),  row.names = FALSE)
+
+
+#FOR complexmodels:
+bt_complex_wide <- bt_boot_complex_df %>%
+  dplyr::select(casepilot, iteration, term, status, season, vegpresence, ghgspecies, emmean_bt) %>%
+  tidyr::pivot_wider(names_from = ghgspecies, values_from = emmean_bt)
+
+gwp_complex_df <- bt_complex_wide %>%
+  mutate(
+    gwp100 = (co2*44.0095) + ((ch4*1e-3*16.04246) * gwp100factor),
+    gwp20  =  (co2*44.0095) + ((ch4*1e-3*16.04246) * gwp20factor)
+  ) %>%
+  tidyr::pivot_longer(
+    cols = c(gwp100, gwp20),
+    names_to = "ghgspecies",
+    values_to = "emmean_bt"
+  )
+
+
+#Save back-transformed emmeans distributions (just in case): 
+write.csv(gwp_complex_df,  file = paste0(path_2_modeloutputs,"gwp_complex_df.csv"),  row.names = FALSE)
+
+##B) EMMEAN ------
+gwp_sum_emmean_RI <- summarise_emm(gwp_simple_df, value_col = "emmean_bt")
+gwp_sum_emmean_rest <- summarise_emm(gwp_complex_df, value_col = "emmean_bt")
+
+##C) CONTRASTS-----
+#Contrasts and pvalues for co2eq are calculated directly in the real scale (no model-scale for these metrics)
+
+#STATUS simple
+gwp_contr_status_simple <- gwp_simple_df %>%
+  filter(term == "status") %>%
+  compute_pairwise(value_col = "emmean_bt", group_vars = NULL, level_var = "status") %>%
+  summarise_contrasts(compute_p = TRUE) %>%
+  mutate(comparison = "status")
+
+#SEASON simple 
+gwp_contr_season_simple <- gwp_simple_df %>%
+  filter(term == "season") %>%
+  compute_pairwise(value_col = "emmean_bt", group_vars = NULL, level_var = "season") %>%
+  summarise_contrasts(compute_p = TRUE) %>%
+  mutate(comparison = "season")
+
+#STATUS WITHIN SEASON simple
+gwp_contr_ss_simple <- gwp_simple_df %>%
+  filter(term == "inseason_status") %>%
+  compute_pairwise(value_col = "emmean_bt", group_vars = "season", level_var = "status") %>%
+  summarise_contrasts(compute_p = TRUE) %>%
+  mutate(comparison = "inseason_status")
+
+#Combine Simple contrasts: 
+gwp_contr_RI <- bind_rows(
+  gwp_contr_status_simple,
+  gwp_contr_season_simple,
+  gwp_contr_ss_simple) %>%
+  dplyr::select(casepilot, ghgspecies, comparison, contrast, season, mean, se, lwr, upr,n_boot, p, p_adj)
+
+
+#STATUS complex
+gwp_contr_status_complex <- gwp_complex_df %>%
+  filter(term == "status") %>%
+  compute_pairwise(value_col = "emmean_bt", group_vars = NULL, level_var = "status") %>%
+  summarise_contrasts(compute_p = TRUE) %>%
+  mutate(comparison = "status")
+
+#SEASON complex
+gwp_contr_season_complex <- gwp_complex_df %>%
+  filter(term == "season") %>%
+  compute_pairwise(value_col = "emmean_bt", group_vars = NULL, level_var = "season") %>%
+  summarise_contrasts(compute_p = TRUE) %>%
+  mutate(comparison = "season")
+
+#STATUS WITHIN SEASON complex
+gwp_contr_ss_complex <- gwp_complex_df %>%
+  filter(term == "inseason_status") %>%
+  compute_pairwise(value_col = "emmean_bt", group_vars = "season", level_var = "status") %>%
+  summarise_contrasts(compute_p = TRUE) %>%
+  mutate(comparison = "inseason_status")
+
+#STATUS WITHIN VEGPRESENCE complex
+gwp_contr_sv_complex <- gwp_complex_df %>%
+  filter(term == "inveg_status") %>%
+  compute_pairwise(value_col = "emmean_bt", group_vars = "vegpresence", level_var = "status") %>%
+  summarise_contrasts(compute_p = TRUE) %>%
+  mutate(comparison = "inveg_status")
+
+#COMBINE complex:
+gwp_contr_rest <- bind_rows(
+  gwp_contr_status_complex,
+  gwp_contr_season_complex,
+  gwp_contr_ss_complex,
+  gwp_contr_sv_complex) %>%
+  dplyr::select(casepilot, ghgspecies, comparison, contrast, season, vegpresence, mean, se, lwr, upr,n_boot, p, p_adj)
+
+
+#5. Format and save------
+
+#COMBINE OUTPUTS FROM DIFFERENT GASSES. 
+all_contr_RI <- bind_rows(gwp_contr_RI, bt_contr_RI)
+all_contr_rest <- bind_rows(gwp_contr_rest, bt_contr_rest)
+
+all_emmean_RI <- bind_rows(bt_sum_emmean_RI, gwp_sum_emmean_RI)
+all_emmean_rest <- bind_rows(bt_sum_emmean_rest, gwp_sum_emmean_rest)
+
+
+##5.1. Simplemodels------
+
+#Format contrasts RI: 
+posthoctests_RI_chambermodels<- all_contr_RI %>% 
+  rename(estimate_bt=mean, SE_bt=se,lower.CL_bt=lwr, upper.CL_bt=upr, boot_n= n_boot, p.value= p_adj) %>% 
+  mutate(comparison=case_when(comparison=="inseason_status"~"status_within_season",
+                              comparison=="inveg_status"~"status_within_vegpresence",
+                              comparison=="status"~"status",
+                              comparison=="season"~"season",
+                              TRUE~NA)) %>% 
+  dplyr::select(casepilot, ghgspecies, comparison, contrast, season, 
+                estimate_bt, SE_bt, lower.CL_bt, upper.CL_bt, boot_n, p.value) %>% 
+  mutate(
+    # Desired ordering
+    ghgspecies = factor(ghgspecies, levels = c("co2", "ch4", "gwp100", "gwp20")),
+    comparison = factor(comparison, levels = c("status","season","status_within_season")),
+    season = factor(season, levels = c("S1", "S2", "S3", "S4"))
+  ) %>%
+  arrange(casepilot,ghgspecies,comparison,season)
+  
 
 
 #Obtain CLDs (letter-groups) based on post-hoc tests for every comparison:
-CLD_letters <- complexmodel_customweight_posthoc_tests %>%
-  #leave only (1) variables that identify unique comparisons, (2)contrast column, (3) p.value column
-  #season and vegpresence are kept to account for status_within_season and status_within_vegpresence comparison. 
-  dplyr::select(casepilot, ghgspecies, comparison, season, vegpresence, contrast, p.value) %>%
-  #Group by comparison identifiers
-  group_by(casepilot, ghgspecies, comparison, season, vegpresence) %>%
-  #Remove any spaces from contrast column (mutcompLetters expects levels separated by a hyphen "-")
-  mutate(contrast=gsub(" ","", contrast)) %>% 
-  #Nest data for each group
+#we need to substitute the NAs in status and season with "." to allow valid join afterwards. 
+# Obtain CLDs (letter-groups)
+simpleCLD_letters <- posthoctests_RI_chambermodels %>%
+  # Keep only needed columns
+  dplyr::select(casepilot, ghgspecies, comparison, season, contrast, p.value) %>%
+  # Clean contrast + replace NA with placeholder
+  mutate(
+    contrast = gsub(" ", "", contrast),
+    #Add seasonlevel for status_within_season comparison
+    seasonlevel=if_else(comparison=="status_within_season", season, ".")
+  ) %>%
+  # Group by comparison context
+  group_by(casepilot, ghgspecies, comparison, seasonlevel) %>%
   nest() %>%
-  # Step 3: Apply multcompLetters to each group
-  mutate(letters = purrr::map(data, function(group_df) {
-    # Extract levels and p-values 
-    contrast_matrix <- group_df %>%
-      dplyr::select(contrast, p.value) %>%
-      deframe()
-    # Apply multcompLetters
-    multcompLetters(contrast_matrix)$Letters %>%
-      enframe(name = "level", value = "cld_group")
-  })) %>%
-  # Step 4: Unnest results
+  # Apply multcompLetters per group
+  mutate(
+    letters = purrr::map(data, function(group_df) {
+      contrast_matrix <- group_df %>%
+        dplyr::select(contrast, p.value) %>%
+        deframe()
+      multcompLetters(contrast_matrix)$Letters %>%
+        enframe(name = "level", value = "cld_group")
+    })
+  ) %>%
+  # Unnest
   dplyr::select(-data) %>%
-  unnest(letters) %>% 
-  #Reformat level to fit the appropriate columns: season or status
-  mutate(season=if_else(level%in%c("S1","S2","S3","S4"),level,season),
-         status=if_else(level%in%c("Altered","Preserved","Restored"),level, NA),
-         #Mantain level to identify nested comparisons 
-         seasonlevel=if_else(comparison=="status_within_season",season,NA),
-         vegpresencelevel=if_else(comparison=="status_within_vegpresence",vegpresence,NA)) %>% 
-  dplyr::select(casepilot, ghgspecies, comparison,status,season,vegpresence, seasonlevel, vegpresencelevel, cld_group)
+  unnest(letters) %>%
+  # Recover status and season
+  mutate(
+    status = stringr::str_extract(level, "Altered|Preserved|Restored"),
+    season = if_else(
+      comparison == "season",
+      level,      # season levels are in "level"
+      seasonlevel # otherwise comes from grouping
+    ),
+    # Replace NA status with placeholder (for join compatibility)
+    status = ifelse(is.na(status), ".", status)
+  ) %>%
+  # Final columns (JOIN-READY)
+  dplyr::select(casepilot, ghgspecies, comparison, status, season, seasonlevel,
+                cld_group)
 
 
-#Get emmeans (in model scale) from loop list 
-complexmodel_customweight_emmeans<- purrr::map_dfr(complex_comparison_list, "emmeans_og")
+#Format EMMs
+EMMs_RI_formated<- all_emmean_RI %>% 
+  rename(emmean_bt=mean, SE_bt=se,lower.CL_bt=lwr,upper.CL_bt=upr,boot_n=n_boot) %>% 
+  mutate(comparison=case_when(term=="inseason_status"~"status_within_season",
+                              term=="inveg_status"~"status_within_vegpresence",
+                              term=="status"~"status",
+                              term=="season"~"season",
+                              TRUE~NA),
+         seasonlevel=if_else(comparison=="status_within_season", season, ".")) %>% 
+  dplyr::select(casepilot, ghgspecies, comparison, status, season, seasonlevel,
+                boot_n, emmean_bt, SE_bt, lower.CL_bt, upper.CL_bt)
 
-#Add CLD and back transform emmeans
-complexmodel_customweight_emmeansCLD <- complexmodel_customweight_emmeans %>%
+
+#Add CLD to formated emmeans
+EMMsCLD_RI_formated <- EMMs_RI_formated %>%
   #ADD CLD group-letters (re-coding them so that "a" always identifies the
   #significant group with lowest emmean, b the next lowest emmean, and so on...)
-  left_join(CLD_letters, by = c("status", "comparison", "ghgspecies", "casepilot", "season","vegpresence")) %>%
+  left_join(
+    simpleCLD_letters,
+    by = c("casepilot","ghgspecies","comparison","status","season","seasonlevel")
+  ) %>%
   #Separate each comparison group to do the letter re-coding
-  group_split(casepilot, ghgspecies, comparison, seasonlevel,vegpresencelevel) %>%
+  group_split(casepilot, ghgspecies, comparison, seasonlevel) %>%
   map_dfr(function(group_df) {
     # Step 1: Order by emmean
-    group_df <- group_df %>% arrange(emmean_og)
+    group_df <- group_df %>% arrange(emmean_bt)
     # Step 2: Extract and map letters
     letter_list <- str_split(group_df$cld_group, "")
     unique_letters <- unique(unlist(letter_list))
@@ -3579,19 +3164,203 @@ complexmodel_customweight_emmeansCLD <- complexmodel_customweight_emmeans %>%
       mutate(cld_group = map_chr(letter_list, ~ paste0(letter_map[.x], collapse = "")))
     return(group_df)
   }) %>% 
-  #remove unnecesary grouping variables
-  dplyr::select(-c(seasonlevel,vegpresencelevel)) %>% 
+  #Alphabetical order of mixed "ba" "ab" cld_groups
+  mutate(cld_group=sapply(strsplit(cld_group, ""), function(x) paste(sort(x), collapse = ""))) %>% 
   #Format final emmean_CLD: select columns
-  dplyr::select(casepilot, ghgspecies, comparison, status, season,vegpresence, weights_used,
-                df, emmean_og, SE_og,lower.CL_og, upper.CL_og,
-                cld_group,
-                emmean_bt, SE_bt, lower.CL_bt, upper.CL_bt) %>% 
+  dplyr::select(casepilot, ghgspecies, comparison, status, season, boot_n, emmean_bt, SE_bt, lower.CL_bt, upper.CL_bt, cld_group) %>% 
   #Format final emmean_CLD: arrange values
-  arrange(casepilot,ghgspecies, comparison,season,vegpresence, status)
+  mutate(
+    # Desired ordering
+    ghgspecies = factor(ghgspecies, levels = c("co2", "ch4", "gwp100", "gwp20")),
+    comparison = factor(comparison, levels = c("status","season","status_within_season")),
+    season = factor(season, levels = c("S1", "S2", "S3", "S4")),
+    status = factor(status, levels = c("Altered", "Preserved", "Restored"))
+  ) %>%
+  arrange(casepilot,ghgspecies,comparison,season,status)
 
-#Save emmeans and groupletters (back-transformed):  
-write.csv(x = complexmodel_customweight_emmeansCLD, file = paste0(path_2_modeloutputs,"EmmeansCLD_rest_chambermodels.csv"),row.names = F)
 
-}
-#_____________----
+#Save Final outputs: 
+EMMsCLD_RI_formated
+#save as EmmeansCLD_RI_chambermodels_boot.csv
+write.csv(x = EMMsCLD_RI_formated, 
+          file = paste0(path_2_modeloutputs,"EmmeansCLD_RI_chambermodels_boot.csv"),
+          row.names = F)
+
+
+posthoctests_RI_chambermodels
+#save as Posthoctests_RI_chambermodels_boot.csv
+write.csv(x = posthoctests_RI_chambermodels, 
+          file = paste0(path_2_modeloutputs,"Posthoctests_RI_chambermodels_boot.csv"),
+          row.names = F)
+
+
+
+
+
+
+##5.2. Complexmodels----
+
+
+#Format contrasts REST: 
+posthoctests_rest_chambermodels<- all_contr_rest %>% 
+  rename(estimate_bt=mean, SE_bt=se,lower.CL_bt=lwr, upper.CL_bt=upr, boot_n= n_boot, p.value= p_adj) %>% 
+  mutate(comparison=case_when(comparison=="inseason_status"~"status_within_season",
+                              comparison=="inveg_status"~"status_within_vegpresence",
+                              comparison=="status"~"status",
+                              comparison=="season"~"season",
+                              TRUE~NA)) %>% 
+  dplyr::select(casepilot, ghgspecies, comparison, contrast, season, vegpresence, 
+                estimate_bt, SE_bt, lower.CL_bt, upper.CL_bt, boot_n, p.value) %>% 
+  # Desired ordering
+  mutate(
+    ghgspecies = factor(ghgspecies, levels = c("co2", "ch4", "gwp100", "gwp20")),
+    comparison = factor(comparison, levels = c("status","season","status_within_season","status_within_vegpresence")),
+    season = factor(season, levels = c("S1", "S2", "S3", "S4")),
+    vegpresence=factor(vegpresence, levels = c("Non-vegetated","Vegetated"))
+  ) %>%
+  arrange(casepilot,ghgspecies,comparison,season,vegpresence)
+
+
+#Obtain CLDs (letter-groups) based on post-hoc tests for every comparison:
+#we need to substitute the NAs in status and season with "." to allow valid join afterwards. 
+complexCLD_letters <- posthoctests_rest_chambermodels %>%
+  #leave only (1) variables that identify unique comparisons, (2)contrast column, (3) pvalue column
+  #seasonlevel and vegpresencelevel is kept to account for status_within_season comparison. 
+  dplyr::select(casepilot, ghgspecies, comparison, season,vegpresence, contrast, p.value) %>% 
+  #Remove any spaces from contrast column (mutcompLetters expects levels to be only separated by a hyphen "-")
+  mutate(contrast=gsub(" ","", contrast),
+         #Add seasonlevel for status_within_season comparison
+         seasonlevel=if_else(comparison=="status_within_season", season, "."),
+         #Add vegpresenelevel for status_within_vegpresence comparison
+         vegpresencelevel=if_else(comparison=="status_within_vegpresence", vegpresence, ".")) %>% 
+  #Group by comparison identifiers
+  group_by(casepilot, ghgspecies, comparison, seasonlevel, vegpresencelevel) %>%
+  #Nest data for each group
+  nest() %>%
+  # Step 3: Apply multcompLetters to each group
+  mutate(letters = purrr::map(data, function(group_df) {
+    # Extract levels and p-values 
+    contrast_matrix <- group_df %>%
+      dplyr::select(contrast, p.value) %>%
+      deframe()
+    
+    # Apply multcompLetters
+    multcompLetters(contrast_matrix)$Letters %>%
+      enframe(name = "level", value = "cld_group")
+  })) %>%
+  # Step 4: Unnest results
+  dplyr::select(-data) %>%
+  unnest(letters) %>% 
+  #Reformat level to fit the appropriate columns: season, status, vegpresence
+  mutate(
+    status = stringr::str_extract(level, "Altered|Preserved|Restored"),
+    season = if_else(comparison=="season", level, seasonlevel),
+    vegpresence = vegpresencelevel,
+    # Replace NA status with placeholder (for join compatibility)
+    status = ifelse(is.na(status), ".", status)
+    ) %>% 
+  dplyr::select(casepilot, ghgspecies, comparison, status, season, vegpresence, seasonlevel, vegpresencelevel, cld_group)
+
+
+#Format EMMs
+EMMs_rest_formated<- all_emmean_rest %>% 
+  rename(emmean_bt=mean, SE_bt=se,lower.CL_bt=lwr,upper.CL_bt=upr,boot_n=n_boot) %>% 
+  mutate(comparison=case_when(term=="inseason_status"~"status_within_season",
+                              term=="inveg_status"~"status_within_vegpresence",
+                              term=="status"~"status",
+                              term=="season"~"season",
+                              TRUE~NA)) %>% 
+  dplyr::select(casepilot, ghgspecies, comparison, status, season,vegpresence, boot_n, emmean_bt, SE_bt, lower.CL_bt, upper.CL_bt)
+
+
+
+#Add CLD to formated emmeans
+EMMsCLD_RI_formated <- EMMs_RI_formated %>%
+  #ADD CLD group-letters (re-coding them so that "a" always identifies the
+  #significant group with lowest emmean, b the next lowest emmean, and so on...)
+  left_join(
+    simpleCLD_letters,
+    by = c("casepilot","ghgspecies","comparison","status","season","seasonlevel")
+  ) %>%
+  #Separate each comparison group to do the letter re-coding
+  group_split(casepilot, ghgspecies, comparison, seasonlevel) %>%
+  map_dfr(function(group_df) {
+    # Step 1: Order by emmean
+    group_df <- group_df %>% arrange(emmean_bt)
+    # Step 2: Extract and map letters
+    letter_list <- str_split(group_df$cld_group, "")
+    unique_letters <- unique(unlist(letter_list))
+    new_letters <- letters[seq_along(unique_letters)]
+    letter_map <- setNames(new_letters, unique_letters)
+    # Step 3: Apply mapping
+    group_df <- group_df %>%
+      mutate(cld_group = map_chr(letter_list, ~ paste0(letter_map[.x], collapse = "")))
+    return(group_df)
+  }) %>% 
+  #Alphabetical order of mixed "ba" "ab" cld_groups
+  mutate(cld_group=sapply(strsplit(cld_group, ""), function(x) paste(sort(x), collapse = ""))) %>% 
+  #Format final emmean_CLD: select columns
+  dplyr::select(casepilot, ghgspecies, comparison, status, season, boot_n, emmean_bt, SE_bt, lower.CL_bt, upper.CL_bt, cld_group) %>% 
+  #Format final emmean_CLD: arrange values
+  mutate(
+    # Desired ordering
+    ghgspecies = factor(ghgspecies, levels = c("co2", "ch4", "gwp100", "gwp20")),
+    comparison = factor(comparison, levels = c("status","season","status_within_season","status_within_vegpresence")),
+    season = factor(season, levels = c("S1", "S2", "S3", "S4")),
+    status = factor(status, levels = c("Altered", "Preserved", "Restored"))
+  ) %>%
+  arrange(casepilot,ghgspecies,comparison,season,status)
+
+
+#Add CLD to formated emmeans
+EMMsCLD_rest_formated <- EMMs_rest_formated %>%
+  #ADD CLD group-letters (re-coding them so that "a" always identifies the
+  #significant group with lowest emmean, b the next lowest emmean, and so on...)
+  left_join(complexCLD_letters, by = c("casepilot","ghgspecies","comparison","status","season","vegpresence")) %>%
+  #Separate each comparison group to do the letter re-coding
+  group_split(casepilot, ghgspecies, comparison, seasonlevel,vegpresencelevel) %>%
+  map_dfr(function(group_df) {
+    # Step 1: Order by emmean
+    group_df <- group_df %>% arrange(emmean_bt)
+    # Step 2: Extract and map letters
+    letter_list <- str_split(group_df$cld_group, "")
+    unique_letters <- unique(unlist(letter_list))
+    new_letters <- letters[seq_along(unique_letters)]
+    letter_map <- setNames(new_letters, unique_letters)
+    # Step 3: Apply mapping
+    group_df <- group_df %>%
+      mutate(cld_group = map_chr(letter_list, ~ paste0(letter_map[.x], collapse = "")))
+    return(group_df)
+  }) %>% 
+  #Alphabetical order of mixed "ba" "ab" cld_groups
+  mutate(cld_group=sapply(strsplit(cld_group, ""), function(x) paste(sort(x), collapse = ""))) %>% 
+  #Format final emmean_CLD: select columns
+  dplyr::select(casepilot, ghgspecies, comparison, status, season, vegpresence, boot_n, emmean_bt, SE_bt, lower.CL_bt, upper.CL_bt, cld_group) %>% 
+  #Format final emmean_CLD: arrange values
+  mutate(
+    # Desired ordering
+    ghgspecies = factor(ghgspecies, levels = c("co2", "ch4", "gwp100", "gwp20")),
+    comparison = factor(comparison, levels = c("status","season","status_within_season","status_within_vegpresence")),
+    season = factor(season, levels = c("S1", "S2", "S3", "S4")),
+    status = factor(status, levels = c("Altered", "Preserved", "Restored")),
+    vegpresence = factor(vegpresence, levels=c("Non-vegetated","Vegetated"))
+  ) %>%
+  arrange(casepilot,ghgspecies,comparison,season,vegpresence,status)
+
+
+
+
+#Save Final outputs: 
+EMMsCLD_rest_formated
+#save as EmmeansCLD_rest_chambermodels_boot.csv
+write.csv(x = EMMsCLD_rest_formated, 
+          file = paste0(path_2_modeloutputs,"EmmeansCLD_rest_chambermodels_boot.csv"),
+          row.names = F)
+
+
+posthoctests_rest_chambermodels
+#save as Posthoctests_rest_chambermodels_boot.csv
+write.csv(x = posthoctests_rest_chambermodels, 
+          file = paste0(path_2_modeloutputs,"Posthoctests_rest_chambermodels_boot.csv"),
+          row.names = F)
 

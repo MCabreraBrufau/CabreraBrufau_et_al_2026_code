@@ -13,7 +13,7 @@
 #1. Import all fluxes and combine in single table (UniqueID, ghg_best, ghg_se, ghg_model) 
 #2. Import harmonized field observations. 
 #3. Discard non-appropriate fluxes (rising/receding tide, after veg cut, appropriate strata per subsite only)
-#5. Integrate day-night fluxes,calculate global warming potential GWPco2andch4 (ch4+co2)
+#5. Integrate day-night fluxes,calculate global warming potential of CO2+CH4 as CO2eq: gwp20 and gwp100
 #6. Final formatting
 #7. Save datasets for further analysis. 
 
@@ -31,7 +31,7 @@
 #Per-plotcode harmonized field observations. 
 
 #Outputs: 
-#ChamberData4paper.csv: containing valid daily fluxes of co2, ch4 and combined GWP (co2+ch4).
+#ChamberData4paper.csv: containing valid daily fluxes of co2, ch4 and combined (co2+ch4) CO2 equivalents: gwp20 and gwp100.
 
 
 rm(list = ls()) # clear workspace
@@ -193,7 +193,7 @@ tidal_IDs <- fieldobs_plotcode %>%
 CA_wrongstrata_IDs<- c()
 
 #2.2. Curonian lagoon (CU): inconsistent bare representation (bare sediments
-#(beach) wrongly considered for restored sites, never for preserved or altered,
+#of beach wrongly considered for restored sites, never for preserved or altered,
 #not appropriate for comparisons). Only vegetated and open water areas are part
 #of the sites sensu-stricto.
 CU_wrongstrata_IDs<- fieldobs_plotcode %>% filter(casepilot=="CU") %>% filter(strata=="bare") %>%
@@ -201,6 +201,7 @@ CU_wrongstrata_IDs<- fieldobs_plotcode %>% filter(casepilot=="CU") %>% filter(st
   pivot_longer(cols = everything(), values_to = "UniqueID") %>%
   pull(UniqueID) %>%
   na.omit()
+
 #2.3. Danube delta (DA): inconsistent strata in some samplings: exclude
 #vegetated of S3-DA-A2 (less than 10% of site, not representative), exclude bare
 #of S1-DA-R2 (sampled during first campaign but less than 10% of site)
@@ -359,12 +360,17 @@ daily_ghg_plotcode<- valid_fieldobs_plotcode %>%
   #Transform molar units for daily flux: 
   #CO2: umol per m2 per day --> mol per m2 per day
   #CH4: nmol per m2 per day --> mmol per m2 per day
-  mutate(co2_mol=co2*1e-6,
-         ch4_mmol=ch4*1e-6,
+  mutate(co2_mol= co2*1e-6,
+         ch4_mmol= ch4*1e-6,
          #Global warming potential GWP100: 
-         gwp_co2=co2_mol*44.0095, #molar flux* molar mass-->g/m2/day
-         gwp_ch4=(ch4_mmol*1e-3)*16.04246*27,#molar flux * molar mass* GWP100 factor 27
-         gwp_co2andch4= gwp_co2+gwp_ch4) %>%  #Sum of gwp of co2 and ch4 only
+         gwp100_co2= co2_mol*44.0095, #molar flux* molar mass-->g/m2/day
+         gwp100_ch4= (ch4_mmol*1e-3)*16.04246*27,#molar flux * molar mass* GWP100 factor 27.0
+         gwp100= gwp100_co2+gwp100_ch4,   #Sum of gwp100 of co2 and ch4 in gCO2eq/m2/day
+         #Global warming potential GWP20
+         gwp20_co2= gwp100_co2, #same as gwp100_co2
+         gwp20_ch4= (ch4_mmol*1e-3)*16.04246*79.7,#molar flux * molar mass* GWP20 factor 79.7
+         gwp20= gwp20_co2+gwp20_ch4  #sum of gwp20 of co2 and ch4 in gCO2eq/m2/day
+         ) %>%
   dplyr::select(-c(co2, ch4)) %>% 
   #Add modeling variables: 
   mutate(status=substr(x = sampling, start = 7, stop=7),
@@ -396,7 +402,7 @@ rm(samplings, sampling_daylight, fieldobs_plotcode, valid_plotcodes)
 #Produce final dataset to be used in models. Formatting to simplify filtering for modeling. 
 
 #We will use molar fluxes for individual ghgspecies and CO2eq (gCo2eq /m2/d) for
-#GWP of combined ghgspecies. Add column with "units" to be able to
+#GWP100 and GWP20 of combined ghgspecies. Add column with "units" to be able to
 #differentiate.
 
 #We format the dataset to be easily used across our modeling approaches: 
@@ -406,20 +412,23 @@ data4models <- daily_ghg_plotcode %>%
   dplyr::select(plotcode, season, casepilot, status, subsite, sampling, strata, 
                 co2_mol, #mol per m2 per day
                 ch4_mmol, #mmol per m2 per day
-                gwp_co2andch4) %>% #gCO2eq per m2 per day
+                gwp100, #gCO2eq (100 years) per m2 per day
+                gwp20) %>% #gCO2eq (20 years) per m2 per day
   pivot_longer(
-    cols = c(co2_mol, ch4_mmol, gwp_co2andch4),
+    cols = c(co2_mol, ch4_mmol, gwp100,gwp20),
     names_to = "ghgspecies",
     values_to = "dailyflux"
   ) %>% 
   #Add unitflux variable
   mutate(unitflux=case_when(ghgspecies=="co2_mol"~"mol per m2 per day",
                             ghgspecies=="ch4_mmol"~"mmol per m2 per day",
-                            ghgspecies=="gwp_co2andch4"~"gCO2eq per m2 per day")) %>% 
+                            ghgspecies=="gwp100"~"gCO2eq100y per m2 per day",
+                            ghgspecies=="gwp20"~"gCO2eq20y per m2 per day")) %>% 
   #Remove units from ghgspecies:
   mutate(ghgspecies=case_when(ghgspecies=="co2_mol"~"co2",
                               ghgspecies=="ch4_mmol"~"ch4",
-                              ghgspecies=="gwp_co2andch4"~"gwp_co2andch4")) %>% 
+                              ghgspecies=="gwp100"~"gwp100",
+                              ghgspecies=="gwp20"~"gwp20")) %>% 
   mutate(across(c(season, casepilot, status, subsite, sampling, strata), as.factor))
 
 #7.Save datasets--------
